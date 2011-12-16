@@ -1,14 +1,29 @@
 A probabilistic CKY parser for PCFGs.
 
-- accepts arbitrary binary grammars, in the same format as used by Bitpar
+- accepts arbitrary binary grammars, in the same format as used by Bitpar.
+- Input and output is also similar to Bitpar: input is one word per line,
+  sentences separated by a blank line.
 - produces exact k-best lists for arbitrary k, on the basis of
   an exhaustive chart
 - coarse-to-fine parsing: parse first with a coarse grammar with symbols of
-  the for A, then parse with fine grammar with symbols of the form A@x (WIP).
+  the form A, then parse with fine grammar with symbols of the form A@x (WIP).
 
-Requires a recent version of Python 2.x and Cython. Compile with "make".
+Requires a recent version of Python 2.x, Cython and Numpy.
+Compile with "make".
 
 Example invocation:
 
 $ python parser.py t.rules t.lexicon t.test
+[...]
+vitprob=0.001157291672453511
+(TOP (S (NP (PN John))(VP (V sees)(VP (NP (DT the)(NN boy))(PP (IN with)(NP (DT the)(NN telescope)))))))
+vitprob=0.0007715277816356735
+(TOP (S (NP (PN John))(VP (V sees)(NP (NP (DT the)(NN boy))(PP (IN with)(NP (DT the)(NN telescope)))))))
+
+An example of coarse-to-fine with a PCFG reduction of DOP as the fine grammar:
+
+$ python parser.py t.rules t.lexicon tdop.rules tdop.lexicon t.test
+[...]
+prob=5.055473074786293e-16
+(TOP (S (NP (PN John))(VP (VP (V sees)(NP (DT the)(NN boy)))(PP (IN with)(NP (DT the)(NN telescope))))))
 

@@ -44,13 +44,11 @@ def parse(list sent, Grammar grammar, whitelist):
 				# update filter
 				if left > minsplitleft[terminal.lhs, right]:
 					minsplitleft[terminal.lhs, right] = left
-					maxsplitleft[terminal.lhs, right] = left
-				elif left < maxsplitleft[terminal.lhs, right]:
+				if left < maxsplitleft[terminal.lhs, right]:
 					maxsplitleft[terminal.lhs, right] = left
 				if right < minsplitright[terminal.lhs, left]:
 					minsplitright[terminal.lhs, left] = right
-					maxsplitright[terminal.lhs, left] = right
-				elif right > maxsplitright[terminal.lhs, left]:
+				if right > maxsplitright[terminal.lhs, left]:
 					maxsplitright[terminal.lhs, left] = right
 		# unary rules on POS tags 
 		for rule in <list>grammar.unary:
@@ -68,13 +66,11 @@ def parse(list sent, Grammar grammar, whitelist):
 					# update filter
 					if left > minsplitleft[rule.lhs, right]:
 						minsplitleft[rule.lhs, right] = left
-						maxsplitleft[rule.lhs, right] = left
-					elif left < maxsplitleft[rule.lhs, right]:
+					if left < maxsplitleft[rule.lhs, right]:
 						maxsplitleft[rule.lhs, right] = left
 					if right < minsplitright[rule.lhs, left]:
 						minsplitright[rule.lhs, left] = right
-						maxsplitright[rule.lhs, left] = right
-					elif right > maxsplitright[rule.lhs, left]:
+					if right > maxsplitright[rule.lhs, left]:
 						maxsplitright[rule.lhs, left] = right
 	for span in range(1, lensent + 1):
 		print span,
@@ -114,13 +110,11 @@ def parse(list sent, Grammar grammar, whitelist):
 					if foundbetter and isinf(oldscore):
 						if left > minsplitleft[lhs, right]:
 							minsplitleft[lhs, right] = left
-							maxsplitleft[lhs, right] = left
-						elif left < maxsplitleft[lhs, right]:
+						if left < maxsplitleft[lhs, right]:
 							maxsplitleft[lhs, right] = left
 						if right < minsplitright[lhs, left]:
 							minsplitright[lhs, left] = right
-							maxsplitleft[lhs, right] = left
-						elif right > maxsplitright[lhs, left]:
+						if right > maxsplitright[lhs, left]:
 							maxsplitright[lhs, left] = right
 
 			# unary rules
@@ -140,13 +134,11 @@ def parse(list sent, Grammar grammar, whitelist):
 						# update filter
 						if left > minsplitleft[rule.lhs, right]:
 							minsplitleft[rule.lhs, right] = left
-							maxsplitleft[rule.lhs, right] = left
-						elif left < maxsplitleft[rule.lhs, right]:
+						if left < maxsplitleft[rule.lhs, right]:
 							maxsplitleft[rule.lhs, right] = left
 						if right < minsplitright[rule.lhs, left]:
 							minsplitright[rule.lhs, left] = right
-							maxsplitright[rule.lhs, left] = right
-						elif right > maxsplitright[rule.lhs, left]:
+						if right > maxsplitright[rule.lhs, left]:
 							maxsplitright[rule.lhs, left] = right
 	print
 	return chart
@@ -303,7 +295,7 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, normalize=True):
 			freq = float(freq)
 			lexical.append(Terminal(lhs, u"", float(freq)))
 			fd[lhs] += freq
-	print "finished\nparameter estimation...",
+	print "%d words\nparameter estimation..." % (len(lexicon)),
 	sys.stdout.flush()
 	if normalize:
 		# turn rule frequencies into relative frequencies (as log probs)
