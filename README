@@ -1,0 +1,14 @@
+A probabilistic CKY parser for PCFGs.
+
+- accepts arbitrary binary grammars, in the same format as used by Bitpar
+- produces exact k-best lists for arbitrary k, on the basis of
+  an exhaustive chart
+- coarse-to-fine parsing: parse first with a coarse grammar with symbols of
+  the for A, then parse with fine grammar with symbols of the form A@x (WIP).
+
+Requires a recent version of Python 2.x and Cython. Compile with "make".
+
+Example invocation:
+
+$ python parser.py t.rules t.lexicon t.test
+
