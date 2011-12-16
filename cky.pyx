@@ -195,9 +195,9 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 						if max2 < max1: max1 = max2
 						if max1 < min1: continue
 					for split in range(min1, max1 + 1):
-						ls = chart[rule.rhs1, left, split)
+						ls = chart[rule.rhs1, left, split]
 						if isinf(ls): continue
-						rs = chart[rule.rhs2, split, right)
+						rs = chart[rule.rhs2, split, right]
 						if isinf(rs): continue
 						totl = rule.prob + rs + os
 						if totl < outside[rule.rhs1, left, split]:
@@ -207,7 +207,7 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 							outside[rule.rhs1, split, right] = totr
 			# binary-right
 			for lhs, rules in enumerate(grammar.binaryright):
-				max1 = minleftsplit[lhs, right]
+				max1 = minsplitleft[lhs, right]
 				if max1 < left: continue
 				for rule in rules:
 					os = outside[rule.lhs, left, right]
@@ -222,9 +222,9 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 						if max2 < max1: max1 = max2
 						if max1 < min1: continue
 					for split in range(min1, max1 + 1):
-						ls = chart[rule.rhs1, left, split)
+						ls = chart[rule.rhs1, left, split]
 						if isinf(ls): continue
-						rs = chart[rule.rhs2, split, right)
+						rs = chart[rule.rhs2, split, right]
 						if isinf(rs): continue
 						totl = rule.prob + rs + os
 						if totl < outside[rule.rhs1, left, split]:
@@ -232,7 +232,7 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 						totr = rule.prob + ls + os
 						if totr < outside[rule.rhs2, split, right]:
 							outside[rule.rhs1, split, right] = totr
-		
+
 	return outside
 
 # to avoid overhead of __init__ and __cinit__ constructors
@@ -332,13 +332,13 @@ def reestimate(Grammar coarse, Grammar fine):
 			rhs[mapping[rule.lhs], mapping[rule.rhs1],
 				mapping[rule.rhs2]].append(rule.prob)
 	for rule in coarse.unary:
-		rule.prob = -log(sumlog(rhs[mapping[rule.lhs], mapping[rule.rhs1]])
-					/ sumlog(lhs[mapping[rule.lhs]]))
+		rule.prob = -log(logsum(rhs[mapping[rule.lhs], mapping[rule.rhs1]])
+					/ logsum(lhs[mapping[rule.lhs]]))
 	for rules in coarse.binary:
 		for rule in rules:
-			rule.prob = -log(sumlog(rhs[mapping[rule.lhs],
+			rule.prob = -log(logsum(rhs[mapping[rule.lhs],
 						mapping[rule.rhs1], mapping[rule.rhs2]])
-						/ sumlog(lhs[mapping[rule.lhs]]))
+						/ logsum(lhs[mapping[rule.lhs]]))
 
 def logsum(list logprobs):
 	# Adding probabilities in log space
@@ -346,10 +346,10 @@ def logsum(list logprobs):
 	# https://facwiki.cs.byu.edu/nlp/index.php/Log_Domain_Computations
 	#NB: this version deals with negative logprobs.
 	maxprob = min(logprobs)
-	return log(sum([exp(maxprob - prob) for prob in nlogprobs])) - maxprob
+	return log(sum([exp(maxprob - prob) for prob in logprobs])) - maxprob
 
 def pprint_chart(chart, sent, tolabel):
-""" `pretty print' a chart. """
+	""" `pretty print' a chart. """
 	cdef ChartItem a
 	cdef Edge edge
 	print "chart:"
