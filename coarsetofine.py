@@ -142,9 +142,11 @@ def outsidescores(chart, goal, inside, outside):
 	agenda = Agenda()
 	seq = 0
 	agenda[goal] = seq
+	visited = set()
 	while agenda:
 		item = agenda.popentry().key
 		seq += 1
+		visited.add(item)
 		for edge in chart[item]:
 			if edge.rule.rhs2 == 0:
 				outside[edge.rule.rhs1, item.left, edge.split] += (
@@ -159,10 +161,12 @@ def outsidescores(chart, goal, inside, outside):
 					outside[item.label, item.left, item.right]
 					* inside[edge.rule.rhs1, item.left, edge.split]
 					* exp(-edge.rule.prob))
-				agenda[ChartItem(edge.rule.rhs2, edge.split, item.right)] = seq
+				newitem = ChartItem(edge.rule.rhs2, edge.split, item.right)
+				if newitem not in visited: agenda[newitem] = seq
 			if edge.rule.rhs1:
-				agenda[ChartItem(edge.rule.rhs1, item.left, edge.split)] = seq
-			# do we need to order the agenda more specically?
+				newitem = ChartItem(edge.rule.rhs1, item.left, edge.split)
+				if newitem not in visited: agenda[newitem] = seq
+			# do we need to order the agenda more specifically?
 
 def logsumexp(logprobs):
 	#NB: this expects a list of negative log probabilities and
