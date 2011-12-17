@@ -3,6 +3,7 @@ import sys, codecs
 from collections import defaultdict
 from math import log, exp
 import numpy as np
+from agenda cimport Agenda
 encoding = "utf-8"
 
 def parse(list sent, Grammar grammar, whitelist):
@@ -141,16 +142,47 @@ def parse(list sent, Grammar grammar, whitelist):
 						if right > maxsplitright[rule.lhs, left]:
 							maxsplitright[rule.lhs, left] = right
 	print
-	return chart
+	return chart, viterbi
 
-def insidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitright, maxsplitright):
+def insidescores1(chart, start, grammar, minsplitleft, maxsplitleft, minsplitright, maxsplitright):
 	lensent = start.right
 	inside = np.array([np.inf], dtype='d').repeat(
 		len(grammar.toid) * lensent * (lensent+1)).reshape(
 		(len(grammar.toid), lensent, (lensent+1)))
-	return inside
+	for span in range(lensent, -1, -1):
+		for left in range(lensent - span):
+			right = left + span
+			# unary
+			for rhs in range(len(grammar.toid)):
+				ins = inside[rhs, left, right]
+				if isinf(ins): continue
+				for rule in grammar.unary:
+					if rule.rhs1 != rhs: continue
+					prob = ins + rule.prob
+					inside[rule.lhs, left, right] += exp(-prob)
+			# binary
+			for lhs, rules in enumerate(grammar.binary):
+				min1 = minsplitright[lhs, left]
+				if right < min1: continue
+				for rule in rules:
+					max1 = minsplitleft[rule.rhs2][right]
+					if max1 < min1: continue
+					if max1 - min1 > 2:
+						min2 = maxsplitleft[rule.rhs2, right]
+						if min2 > min1: min1 = min2
+						if max1 < min1: continue
+						max2 = maxsplitright[rule.rhs1, left]
+						if max2 < max1: max1 = max2
+						if max1 < min1: continue
+					for split in range(min1, max1 + 1):
+						ls = chart[rule.rhs1, left, split]
+						if isinf(ls): continue
+						rs = chart[rule.rhs2, split, right]
+						if isinf(rs): continue
+						tot = rule.prob + ls + rs
+						inside[rule.lhs1, left, right] += exp(-tot)
 
-def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitright, maxsplitright):
+def outsidescores1(inside, start, grammar, minsplitleft, maxsplitleft, minsplitright, maxsplitright):
 	# expects grammar.binaryleft, grammar.binaryright
 	lensent = start.right
 	outside = np.array([np.inf], dtype='d').repeat(
@@ -168,7 +200,7 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 					if rule.lhs != lhs: continue
 					prob = os + rule.prob
 					if (prob < outside[rule.rhs1, left, right]
-						and isfinite(chart[rule.rhs1, left, right])):
+						and isfinite(inside[rule.rhs1, left, right])):
 						outside[rule.rhs1, left, right] = prob
 			# binary-left
 			for lhs, rules in enumerate(grammar.binaryleft):
@@ -187,22 +219,18 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 						if max2 < max1: max1 = max2
 						if max1 < min1: continue
 					for split in range(min1, max1 + 1):
-						ls = chart[rule.rhs1, left, split]
+						ls = inside[rule.rhs1, left, split]
 						if isinf(ls): continue
-						rs = chart[rule.rhs2, split, right]
+						rs = inside[rule.rhs2, split, right]
 						if isinf(rs): continue
-						totl = rule.prob + rs + os
-						if totl < outside[rule.rhs1, left, split]:
-							outside[rule.rhs1, left, split] = totl
-						totr = rule.prob + ls + os
-						if totr < outside[rule.rhs2, split, right]:
-							outside[rule.rhs1, split, right] = totr
+						outside[rule.rhs1, left, split] += rule.prob + rs + os
+						outside[rule.rhs2, split, right] += rule.prob + ls + os
 			# binary-right
 			for lhs, rules in enumerate(grammar.binaryright):
 				max1 = minsplitleft[lhs, right]
 				if max1 < left: continue
 				for rule in rules:
-					os = outside[rule.lhs, left, right]
+					os = outside[lhs, left, right]
 					if isinf(os): continue
 					min1 = minsplitright[rule.rhs1][left]
 					if max1 < min1: continue
@@ -214,17 +242,12 @@ def outsidescores(chart, start, grammar, minsplitleft, maxsplitleft, minsplitrig
 						if max2 < max1: max1 = max2
 						if max1 < min1: continue
 					for split in range(min1, max1 + 1):
-						ls = chart[rule.rhs1, left, split]
+						ls = inside[rule.rhs1, left, split]
 						if isinf(ls): continue
-						rs = chart[rule.rhs2, split, right]
+						rs = inside[rule.rhs2, split, right]
 						if isinf(rs): continue
-						totl = rule.prob + rs + os
-						if totl < outside[rule.rhs1, left, split]:
-							outside[rule.rhs1, left, split] = totl
-						totr = rule.prob + ls + os
-						if totr < outside[rule.rhs2, split, right]:
-							outside[rule.rhs1, split, right] = totr
-
+						outside[rule.rhs1, left, split] += rule.prob + rs + os
+						outside[rule.rhs2, split, right] += rule.prob + ls + os
 	return outside
 
 # to avoid overhead of __init__ and __cinit__ constructors
@@ -324,21 +347,21 @@ def reestimate(Grammar coarse, Grammar fine):
 			rhs[mapping[rule.lhs], mapping[rule.rhs1],
 				mapping[rule.rhs2]].append(rule.prob)
 	for rule in coarse.unary:
-		rule.prob = -log(logsum(rhs[mapping[rule.lhs], mapping[rule.rhs1]])
-					/ logsum(lhs[mapping[rule.lhs]]))
+		rule.prob = (logsum(rhs[mapping[rule.lhs], mapping[rule.rhs1]])
+					- logsum(lhs[mapping[rule.lhs]]))
 	for rules in coarse.binary:
 		for rule in rules:
-			rule.prob = -log(logsum(rhs[mapping[rule.lhs],
+			rule.prob = (logsum(rhs[mapping[rule.lhs],
 						mapping[rule.rhs1], mapping[rule.rhs2]])
-						/ logsum(lhs[mapping[rule.lhs]]))
+						- logsum(lhs[mapping[rule.lhs]]))
 
 def logsum(list logprobs):
 	# Adding probabilities in log space
 	# http://blog.smola.org/post/987977550/log-probabilities-semirings-and-floating-point-numbers
 	# https://facwiki.cs.byu.edu/nlp/index.php/Log_Domain_Computations
-	#NB: this version deals with negative logprobs.
+	#NB: this version deals with and returns negative logprobs.
 	maxprob = min(logprobs)
-	return log(sum([exp(maxprob - prob) for prob in logprobs])) - maxprob
+	return maxprob - log(sum([exp(maxprob - prob) for prob in logprobs]))
 
 def pprint_chart(chart, sent, tolabel):
 	""" `pretty print' a chart. """

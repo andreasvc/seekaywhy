@@ -1,11 +1,12 @@
 import sys, time
 from operator import itemgetter
 from math import exp
+from heapq import nlargest
 import numpy as np
 from cky import parse, readbitpargrammar, pprint_chart
 from kbest import lazykbest
 from containers import ChartItem
-from coarsetofine import whitelistfromchart
+from coarsetofine import whitelistfromkbest, whitelistfromposteriors
 from disambiguation import marginalize
 
 def mainsimple(unknownwords):
@@ -23,7 +24,7 @@ def mainsimple(unknownwords):
 			assert word in grammar.lexicon or unknownwords, "unknown word and no open class tags supplied"
 		print "parsing:", n, " ".join(sent),
 		sys.stdout.flush()
-		chart = parse(sent, grammar, None)
+		chart, viterbi = parse(sent, grammar, None)
 		start = ChartItem(grammar.toid["TOP"], 0, len(sent))
 		#pprint_chart(chart, sent, grammar.tolabel)
 		parsetrees = lazykbest(chart, start, 50, grammar.tolabel, sent)
@@ -33,7 +34,6 @@ def mainsimple(unknownwords):
 			out.writelines("vitprob=%.16g\n%s\n" % (exp(-prob), tree)
 				for tree, prob in parsetrees)
 		else:
-			print "No parse"
 			out.write("No parse for \"%s\"\n" % " ".join(sent))
 		out.write("\n")
 		out.flush()
@@ -48,6 +48,7 @@ def mainsimple(unknownwords):
 def mainctf(unknownwords):
 	k = 50
 	m = 10000
+	threshold = 1e-5
 	maxlen = 65
 	unparsed = 0
 	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords)
@@ -59,7 +60,10 @@ def mainctf(unknownwords):
 	if len(sys.argv) == 7: out = open(sys.argv[6], "w")
 	else: out = sys.stdout
 	times = [time.clock()]
-	whitelist = np.array([np.NAN], dtype='d').repeat(
+	coarsechart = np.array([np.inf], dtype='d').repeat(
+					maxlen * (maxlen + 1) * len(coarse.toid)
+					).reshape((len(coarse.toid), maxlen, maxlen + 1))
+	finechart = np.array([np.NAN], dtype='d').repeat(
 					maxlen * (maxlen + 1) * len(fine.toid)
 					).reshape((len(fine.toid), maxlen, maxlen + 1))
 	l=[]
@@ -69,24 +73,33 @@ def mainctf(unknownwords):
 		if len(sent) > maxlen: continue
 		for word in sent:
 			assert unknownwords or (word in coarse.lexicon and word in fine.lexicon), "unknown word and no open class tags supplied"
+		coarsechart.fill(np.inf)
 		print "parsing:", n, " ".join(sent)
-		chart = parse(sent, coarse, None)
+		chart, coarsechart = parse(sent, coarse, coarsechart)
 		start = ChartItem(coarse.toid["TOP"], 0, len(sent))
 		if start in chart:
 			print "getting whitelist",
 			sys.stdout.flush()
-			#whitelist.fill(np.NAN)
-			whitelist[:,:len(sent),:len(sent)+1] = np.NAN
-			whitelistfromchart(chart, start, coarse, fine, k, whitelist, maxlen)
+			#finechart.fill(np.NAN)
+			finechart[:,:len(sent),:len(sent)+1] = np.NAN
+			#whitelistfromkbest(chart, start, coarse, fine, k, finechart, maxlen)
+			whitelistfromposteriors(chart, coarsechart, start, coarse, fine, finechart, threshold)
 			print "done"
-			chart = parse(sent, fine, whitelist)
+			chart, finechart = parse(sent, fine, finechart)
 			start = ChartItem(fine.toid["TOP"], 0, len(sent))
 			assert start in chart, "sentence covered by coarse grammar could not be parsed by fine grammar"
 			#pprint_chart(chart, sent, fine.tolabel)
-			out.write("prob=%.16g\n%s\n" % max(marginalize(chart, start, fine.tolabel, sent, n=m).items(), key=itemgetter(1))[::-1])
-			#out.writelines("vitprob=%.16g\n%s\n" % (exp(-prob), tree)
-			#	for tree, prob in lazykbest(chart, start, m,
-			#	fine.tolabel, sent))
+			# MPP
+			parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m).items()
+			# print all parsetrees
+			#out.writelines("parseprob=%.16g\n%s\n" % (prob, tree) for tree, prob in parsetrees)
+			# most probable parse
+			out.write("prob=%.16g\n%s\n" % max(parsetrees, key=itemgetter(1))[::-1])
+			# MPD
+			#parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m, mpd=True).items()
+			# print 10-best derivations
+			#out.writelines("derivprob=%.16g\n%s\n" % (prob, tree) for tree, prob in nlargest(10, parsetrees, key=itemgetter(1)))
+
 		else:
 			unparsed += 1
 			print "No parse"

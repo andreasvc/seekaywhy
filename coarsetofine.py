@@ -3,8 +3,10 @@ items for a fine grammar.
 """
 import re, logging
 from collections import defaultdict
+from math import exp, log
 import numpy as np
 from nltk import Tree
+from agenda import Agenda
 try: dictcast({})
 except NameError:
 	from containers import * #ChartItem, Edge, dictcast, itemcast, edgecast
@@ -18,7 +20,27 @@ reducemarkov = [re.compile("\|<[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*)-?[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*-[^->]*)-?[^>]*>")]
 
-def whitelistfromchart(chart, goal, coarse, fine, k, whitelist, maxlen):
+def whitelistfromposteriors(chart, viterbi, goal, coarse, fine, whitelist, threshold):
+	""" compute posterior probabilities and prune away cells below some
+	threshold. """
+	lensent = goal.right
+	inside = np.array([np.inf], dtype='d').repeat(
+		len(coarse.toid) * lensent * (lensent+1)).reshape(
+		(len(coarse.toid), lensent, (lensent+1)))
+	outside = np.array([np.inf], dtype='d').repeat(
+		len(coarse.toid) * lensent * (lensent+1)).reshape(
+		(len(coarse.toid), lensent, (lensent+1)))
+	outside[goal.label, 0, lensent] = 1.0
+	insidescores(chart, goal, inside)
+	outsidescores(chart, goal, inside, outside)
+	sentprob = inside[goal.label, 0, lensent]
+	posterior = inside * outside / sentprob
+	viterbi[posterior < threshold] = np.NAN
+	viterbi[posterior >= threshold] = np.inf
+	for label, id in fine.toid.iteritems():
+		whitelist[id] = viterbi[coarse.toid[removeids.sub("", label)]]
+
+def whitelistfromkbest(chart, goal, coarse, fine, k, whitelist, maxlen):
 	""" Produce a white list of chart items occurring in the k-best derivations
 	of chart, where labels X in the coarse grammar are projected to the labels
 	X and X@n in 'toid', for possible values of n.  When k==0, the chart is
@@ -101,12 +123,52 @@ def filterchart(chart, start):
 def filter_subtree(start, chart, chart2):
 	chart2[start] = chart[start]
 	for edge in chart[start]:
-		item = new_ChartItem(edge.rule.rhs1, start.i, edge.split)
+		item = new_ChartItem(edge.rule.rhs1, start.left, edge.split)
 		if item.label and item not in chart2:
 			filter_subtree(item, chart, chart2)
 		item = new_ChartItem(edge.rule.rhs2, edge.split, start.right)
 		if item.label and item not in chart2:
 			filter_subtree(item, chart, chart2)
+
+def insidescores(chart, goal, inside):
+	# this is probably incorrect ...
+	# I guess edges which share the same children should share probability 
+	# mass in the total inside probability
+	for item, edges in chart.iteritems():
+		inside[item.label, item.left, item.right] = logsumexp(
+				[edge.inside for edge in edges])
+
+def outsidescores(chart, goal, inside, outside):
+	agenda = Agenda()
+	seq = 0
+	agenda[goal] = seq
+	while agenda:
+		item = agenda.popentry().key
+		seq += 1
+		for edge in chart[item]:
+			if edge.rule.rhs2 == 0:
+				outside[edge.rule.rhs1, item.left, edge.split] += (
+					outside[item.label, item.left, item.right]
+					* exp(-edge.rule.prob))
+			else:
+				outside[edge.rule.rhs1, item.left, edge.split] += (
+					outside[item.label, item.left, item.right]
+					* inside[edge.rule.rhs2, edge.split, item.right]
+					* exp(-edge.rule.prob))
+				outside[edge.rule.rhs2, edge.split, item.right] += (
+					outside[item.label, item.left, item.right]
+					* inside[edge.rule.rhs1, item.left, edge.split]
+					* exp(-edge.rule.prob))
+				agenda[ChartItem(edge.rule.rhs2, edge.split, item.right)] = seq
+			if edge.rule.rhs1:
+				agenda[ChartItem(edge.rule.rhs1, item.left, edge.split)] = seq
+			# do we need to order the agenda more specically?
+
+def logsumexp(logprobs):
+	#NB: this expects a list of negative log probabilities and
+	#returns a normal probability in the interval [0-1].
+	maxprob = min(logprobs)
+	return sum([exp(maxprob - prob) for prob in logprobs]) / exp(maxprob)
 
 
 """
@@ -177,6 +239,7 @@ def doctf(coarse, fine, sent, tree, k, doph, headrules, pa, split,
 			if "@" not in a[0]: print a[0], bin(a[1])
 
 		#pprint_chart(pp, sent, fine.tolabel)
+
 
 def main():
 	from treetransforms import splitdiscnodes, collinize

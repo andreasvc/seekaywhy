@@ -46,7 +46,7 @@ def sldop(chart, start, sent, tags, dopgrammar, secondarymodel, m, sldop_n, samp
 	mpp2 = {}
 	for tt in nlargest(sldop_n, mpp1, key=lambda t: mpp1[t]):
 		mpp2[tt] = mpp1[tt]
-	
+
 	words = [a[0] for a in sent]
 	tagsornil = [a[1] for a in sent] if tags else []
 	chart2, start2 = parse(words, secondarymodel, tagsornil,
@@ -163,13 +163,13 @@ def marginalize(chart, start, tolabel, sent, n=10, sample=False, both=False, sho
 	derivations = set()
 	if sample or both:
 		raise NotImplemented
-		derivations = getsamples(chart, start, n, tolabel)
+		#derivations = getsamples(chart, start, n, tolabel)
 	if not sample or both:
 		derivations.update(lazykbest(chart, start, n, tolabel, sent))
 	if shortest:
 		raise NotImplemented
-		maxprob = min(derivations, key=itemgetter(1))[1]
-		derivations = [(a,b) for a, b in derivations if b == maxprob]
+		#maxprob = min(derivations, key=itemgetter(1))[1]
+		#derivations = [(a,b) for a, b in derivations if b == maxprob]
 	for deriv, prob in derivations:
 		m += 1
 		# simple way of adding probabilities (too easy):

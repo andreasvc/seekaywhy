@@ -15,7 +15,7 @@ from cky cimport new_ChartItem
 	tolabel=dict,
 	prunelist=list,
 	Ih=ChartItem)
-cpdef whitelistfromchart(dict chart,
+cpdef whitelistfromkbest(dict chart,
 		ChartItem goal, Grammar coarse, Grammar fine, int k,
 			np.ndarray[np.double_t, ndim=3] whitelist, int maxlen)
 
