@@ -1,7 +1,7 @@
 cimport cython
 cimport numpy as np
 from kbest cimport lazykthbest, lazykbest
-from agenda cimport Entry
+from agenda cimport Entry, Agenda
 from containers cimport ChartItem, Edge, RankedEdge, Grammar, \
 			dictcast, getlabel, getvec, itemcast, edgecast
 from cky cimport new_ChartItem
@@ -18,6 +18,24 @@ from cky cimport new_ChartItem
 cpdef whitelistfromkbest(dict chart,
 		ChartItem goal, Grammar coarse, Grammar fine, int k,
 			np.ndarray[np.double_t, ndim=3] whitelist, int maxlen)
+
+cpdef whitelistfromposteriors(np.ndarray[np.double_t, ndim=3] inside,
+	np.ndarray[np.double_t, ndim=3] outside,
+	ChartItem goal,
+	Grammar coarse,
+	Grammar fine,
+	np.ndarray[np.double_t, ndim=3] whitelist,
+	short maxlen,
+	double threshold)
+
+cpdef whitelistfromposteriors1(
+	dict chart,
+	np.ndarray[np.double_t, ndim=3] viterbi,
+	ChartItem goal,
+	Grammar coarse,
+	Grammar fine,
+	np.ndarray[np.double_t, ndim=3] whitelist,
+	double threshold)
 
 @cython.locals(
 	entry=Entry,
@@ -42,3 +60,16 @@ cpdef filterchart(chart, start)
 	edge=Edge,
 	item=ChartItem)
 cdef void filter_subtree(ChartItem start, dict chart, dict chart2)
+
+@cython.locals(
+	item=ChartItem,
+	edges=list)
+cpdef insidescores(dict chart, ChartItem goal, np.ndarray[np.double_t, ndim=3] inside)
+
+@cython.locals(
+	agenda=Agenda,
+	visited=set,
+	item=ChartItem,
+	newitem=ChartItem,
+	edge=Edge)
+cpdef outsidescores(dict chart, ChartItem goal, np.ndarray[np.double_t, ndim=3] inside, np.ndarray[np.double_t, ndim=3] outside)

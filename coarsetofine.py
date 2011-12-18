@@ -20,14 +20,29 @@ reducemarkov = [re.compile("\|<[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*)-?[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*-[^->]*)-?[^>]*>")]
 
-def whitelistfromposteriors(chart, viterbi, goal, coarse, fine, whitelist, threshold):
+def whitelistfromposteriors(inside, outside, goal, coarse, fine, finechart, maxlen, threshold):
 	""" compute posterior probabilities and prune away cells below some
 	threshold. """
 	lensent = goal.right
-	inside = np.array([np.inf], dtype='d').repeat(
+	sentprob = inside[goal.label, 0, lensent]
+	print "sentprob=%g" % sentprob
+	numsymbols = len(coarse.toid)
+	posterior = (inside * outside) / sentprob
+	inside[:,:lensent,:lensent + 1] = np.inf
+	inside[posterior < threshold] = np.NAN
+	nonzero = (posterior != 0.0).sum()
+	print "items pruned", nonzero - (posterior >= threshold).sum(), "of", nonzero, "nonzero coarse items;", "items left", (posterior >= threshold).sum()
+	for label, id in fine.toid.iteritems():
+		finechart[id] = inside[coarse.toid[removeids.sub("", label)]]
+	
+def whitelistfromposteriors1(chart, viterbi, goal, coarse, fine, whitelist, threshold):
+	""" compute posterior probabilities and prune away cells below some
+	threshold. """
+	lensent = goal.right
+	inside = np.array([0.0], dtype='d').repeat(
 		len(coarse.toid) * lensent * (lensent+1)).reshape(
 		(len(coarse.toid), lensent, (lensent+1)))
-	outside = np.array([np.inf], dtype='d').repeat(
+	outside = np.array([0.0], dtype='d').repeat(
 		len(coarse.toid) * lensent * (lensent+1)).reshape(
 		(len(coarse.toid), lensent, (lensent+1)))
 	outside[goal.label, 0, lensent] = 1.0
@@ -35,8 +50,9 @@ def whitelistfromposteriors(chart, viterbi, goal, coarse, fine, whitelist, thres
 	outsidescores(chart, goal, inside, outside)
 	sentprob = inside[goal.label, 0, lensent]
 	posterior = inside * outside / sentprob
+	viterbi.fill(np.inf)
 	viterbi[posterior < threshold] = np.NAN
-	viterbi[posterior >= threshold] = np.inf
+	print (posterior >= threshold).sum(), "coarse items left",
 	for label, id in fine.toid.iteritems():
 		whitelist[id] = viterbi[coarse.toid[removeids.sub("", label)]]
 
@@ -61,6 +77,7 @@ def whitelistfromkbest(chart, goal, coarse, fine, k, whitelist, maxlen):
 	for Ih in kbest:
 		l[itemcast(Ih).label, itemcast(Ih).left,
 			itemcast(Ih).right] = np.inf #kbest[Ih]
+	print (l == np.inf).sum(), "of", len(chart), "coarse items left"
 	for a, label in fine.toid.iteritems():
 		whitelist[label] = l[coarse.toid[removeids.sub("", a)]]
 	#logging.debug('pruning with %d nonterminals, %d items' % (
@@ -149,15 +166,18 @@ def outsidescores(chart, goal, inside, outside):
 		visited.add(item)
 		for edge in chart[item]:
 			if edge.rule.rhs2 == 0:
-				outside[edge.rule.rhs1, item.left, edge.split] += (
-					outside[item.label, item.left, item.right]
+				outside[edge.rule.rhs1, item.left, edge.split] = (
+					outside[edge.rule.rhs1, item.left, edge.split]
+					+ outside[item.label, item.left, item.right]
 					* exp(-edge.rule.prob))
 			else:
-				outside[edge.rule.rhs1, item.left, edge.split] += (
+				outside[edge.rule.rhs1, item.left, edge.split] = (
+					outside[edge.rule.rhs1, item.left, edge.split] +
 					outside[item.label, item.left, item.right]
 					* inside[edge.rule.rhs2, edge.split, item.right]
 					* exp(-edge.rule.prob))
-				outside[edge.rule.rhs2, edge.split, item.right] += (
+				outside[edge.rule.rhs2, edge.split, item.right] = (
+					outside[edge.rule.rhs2, edge.split, item.right] +
 					outside[item.label, item.left, item.right]
 					* inside[edge.rule.rhs1, item.left, edge.split]
 					* exp(-edge.rule.prob))

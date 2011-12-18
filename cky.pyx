@@ -17,11 +17,11 @@ def parse(list sent, Grammar grammar, whitelist):
 	cdef Rule rule
 	cdef Terminal terminal
 	cdef dict chart = {}
+	cdef unicode word
 	# the viterbi chart is initially filled with infinite log probabilities,
 	# cells which are to be blocked contain NaN.
-	cdef np.ndarray[np.double_t, ndim=3] viterbi = np.array([np.inf],
-		dtype='d').repeat(lensent * (lensent+1) * numsymbols).reshape(
-		(numsymbols, lensent, (lensent+1))) if whitelist is None else whitelist
+	cdef np.ndarray[np.double_t, ndim=3] viterbi
+	# matrices for the filter which gives minima and maxima for splits
 	cdef np.ndarray[np.int16_t, ndim=2] minsplitleft = np.array([-1],
 		dtype='int16').repeat(numsymbols * (lensent + 1)
 		).reshape(numsymbols, lensent + 1)
@@ -34,11 +34,17 @@ def parse(list sent, Grammar grammar, whitelist):
 	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
 		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
 		numsymbols, lensent + 1)
+	if whitelist is None:
+		viterbi = np.array([np.inf],
+		dtype='d').repeat(lensent * (lensent+1) * numsymbols).reshape(
+		(numsymbols, lensent, (lensent+1)))
+	else: viterbi = whitelist
 	# assign POS tags
 	for left in range(lensent):
 		right = left + 1
 		for terminal in <list>grammar.lexical:
-			if terminal.word == (sent[left] if sent[left] in grammar.lexicon else u""):
+			word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
+			if terminal.word == word:
 				viterbi[terminal.lhs, left, right] = terminal.prob
 				chart[new_ChartItem(terminal.lhs, left, right)] = [
 					new_Edge(terminal.prob, terminal, right)]
@@ -144,110 +150,183 @@ def parse(list sent, Grammar grammar, whitelist):
 	print
 	return chart, viterbi
 
-def insidescores1(chart, start, grammar, minsplitleft, maxsplitleft, minsplitright, maxsplitright):
-	lensent = start.right
-	inside = np.array([np.inf], dtype='d').repeat(
-		len(grammar.toid) * lensent * (lensent+1)).reshape(
-		(len(grammar.toid), lensent, (lensent+1)))
-	for span in range(lensent, -1, -1):
-		for left in range(lensent - span):
+def doinsideoutside(list sent, Grammar grammar, inside, outside):
+	lensent = len(sent); numsymbols = len(grammar.toid)
+	start = ChartItem(grammar.toid["TOP"], 0, lensent)
+	if inside == None:
+		inside = np.array([0.0], dtype='d'
+			).repeat(lensent * (lensent+1) * numsymbols
+			).reshape((numsymbols, lensent, (lensent+1)))
+	else:
+		inside[:,:len(sent),:len(sent)+1] = 0.0
+	if outside == None:
+		outside = np.array([0.0], dtype='d'
+			).repeat(lensent * (lensent+1) * numsymbols
+			).reshape((numsymbols, lensent, (lensent+1)))
+	else:
+		outside[:,:len(sent),:len(sent)+1] = 0.0
+	isl, asl, isr, asr = insidescores(sent, grammar, inside)
+	outside = outsidescores(inside, start, grammar, outside, isl, asl, isr, asr)
+	return inside, outside
+
+cdef insidescores(list sent, Grammar grammar,
+	np.ndarray[np.double_t, ndim=3] inside):
+	""" Grammar must not have log probabilities. """
+	cdef short left, right, mid, span, lensent = len(sent)
+	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
+	cdef long numsymbols = len(grammar.toid), lhs
+	cdef double oldscore, prob, ls, rs, ins
+	cdef bint foundbetter = False
+	cdef Rule rule
+	cdef Terminal terminal
+	cdef unicode word
+	# matrices for the filter which give minima and maxima for splits
+	cdef np.ndarray[np.int16_t, ndim=2] minsplitleft = np.array([-1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)
+		).reshape(numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] maxsplitleft = np.array([lensent+1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
+		numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] minsplitright = np.array([lensent + 1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)
+		).reshape(numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
+		numsymbols, lensent + 1)
+	inside[:,:lensent,:lensent+1] = 0.0
+	print "inside",
+	# assign POS tags
+	for left in range(lensent):
+		right = left + 1
+		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
+		for terminal in <list>grammar.lexical:
+			if terminal.word == word:
+				inside[terminal.lhs, left, right] = terminal.prob
+				# update filter
+				if left > minsplitleft[terminal.lhs, right]:
+					minsplitleft[terminal.lhs, right] = left
+				if left < maxsplitleft[terminal.lhs, right]:
+					maxsplitleft[terminal.lhs, right] = left
+				if right < minsplitright[terminal.lhs, left]:
+					minsplitright[terminal.lhs, left] = right
+				if right > maxsplitright[terminal.lhs, left]:
+					maxsplitright[terminal.lhs, left] = right
+		# unary rules on POS tags 
+		for rule in <list>grammar.unary:
+			if inside[rule.rhs1, left, right] != 0.0:
+				prob = rule.prob * inside[rule.rhs1, left, right]
+				inside[rule.lhs, left, right] += prob
+				# update filter
+				if left > minsplitleft[rule.lhs, right]:
+					minsplitleft[rule.lhs, right] = left
+				if left < maxsplitleft[rule.lhs, right]:
+					maxsplitleft[rule.lhs, right] = left
+				if right < minsplitright[rule.lhs, left]:
+					minsplitright[rule.lhs, left] = right
+				if right > maxsplitright[rule.lhs, left]:
+					maxsplitright[rule.lhs, left] = right
+	for span in range(1, lensent + 1):
+		print span,
+		sys.stdout.flush()
+		# constituents from left to right
+		for left in range(0, lensent - span + 1):
 			right = left + span
-			# unary
-			for rhs in range(len(grammar.toid)):
-				ins = inside[rhs, left, right]
-				if isinf(ins): continue
-				for rule in grammar.unary:
-					if rule.rhs1 != rhs: continue
-					prob = ins + rule.prob
-					inside[rule.lhs, left, right] += exp(-prob)
 			# binary
 			for lhs, rules in enumerate(grammar.binary):
-				min1 = minsplitright[lhs, left]
-				if right < min1: continue
 				for rule in rules:
-					max1 = minsplitleft[rule.rhs2][right]
-					if max1 < min1: continue
-					if max1 - min1 > 2:
-						min2 = maxsplitleft[rule.rhs2, right]
-						if min2 > min1: min1 = min2
-						if max1 < min1: continue
-						max2 = maxsplitright[rule.rhs1, left]
-						if max2 < max1: max1 = max2
-						if max1 < min1: continue
-					for split in range(min1, max1 + 1):
-						ls = chart[rule.rhs1, left, split]
-						if isinf(ls): continue
-						rs = chart[rule.rhs2, split, right]
-						if isinf(rs): continue
-						tot = rule.prob + ls + rs
-						inside[rule.lhs1, left, right] += exp(-tot)
+					narrowr = minsplitright[rule.rhs1, left]
+					if narrowr >= right: continue
+					narrowl = minsplitleft[rule.rhs2, right]
+					if narrowl < narrowr: continue
+					widel = maxsplitleft[rule.rhs2, right]
+					minmid = smax(narrowr, widel)
+					wider = maxsplitright[rule.rhs1, left]
+					maxmid = smin(wider, narrowl) + 1
+					#oldscore = inside[lhs, left, right]
+					foundbetter = False
+					for split in range(minmid, maxmid):
+						ls = inside[rule.rhs1, left, split]
+						if ls == 0.0: continue
+						rs = inside[rule.rhs2, split, right]
+						if rs == 0.0: continue
+						foundbetter = True
+						inside[rule.lhs, left, right] += rule.prob * ls * rs
+					if foundbetter: #and oldscore == 0.0:
+						if left > minsplitleft[rule.lhs, right]:
+							minsplitleft[rule.lhs, right] = left
+						if left < maxsplitleft[rule.lhs, right]:
+							maxsplitleft[rule.lhs, right] = left
+						if right < minsplitright[rule.lhs, left]:
+							minsplitright[rule.lhs, left] = right
+						if right > maxsplitright[rule.lhs, left]:
+							maxsplitright[rule.lhs, left] = right
+			# unary
+			for rule in grammar.unary:
+				ins = inside[rule.rhs1, left, right]
+				if ins == 0.0: continue
+				inside[rule.lhs, left, right] += ins * rule.prob
+				if left > minsplitleft[rule.lhs, right]:
+					minsplitleft[rule.lhs, right] = left
+				if left < maxsplitleft[rule.lhs, right]:
+					maxsplitleft[rule.lhs, right] = left
+				if right < minsplitright[rule.lhs, left]:
+					minsplitright[rule.lhs, left] = right
+				if right > maxsplitright[rule.lhs, left]:
+					maxsplitright[rule.lhs, left] = right
+	print
+	return maxsplitleft, minsplitleft, maxsplitright, minsplitright
 
-def outsidescores1(inside, start, grammar, minsplitleft, maxsplitleft, minsplitright, maxsplitright):
-	# expects grammar.binaryleft, grammar.binaryright
-	lensent = start.right
-	outside = np.array([np.inf], dtype='d').repeat(
-		len(grammar.toid) * lensent * (lensent+1)).reshape(
-		(len(grammar.toid), lensent, (lensent+1)))
-	outside[start.label, 0, lensent] = 0.0
-	for span in range(lensent, -1, -1):
-		for left in range(lensent - span):
+cdef outsidescores(np.ndarray[np.double_t, ndim=3] inside,
+	ChartItem start,
+	Grammar grammar,
+	np.ndarray[np.double_t, ndim=3] outside,
+	np.ndarray[np.int16_t, ndim=2] minsplitleft,
+	np.ndarray[np.int16_t, ndim=2] maxsplitleft,
+	np.ndarray[np.int16_t, ndim=2] minsplitright,
+	np.ndarray[np.int16_t, ndim=2] maxsplitright):
+	cdef short left, right, mid, span, lensent = start.right
+	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
+	cdef long numsymbols = len(grammar.toid), lhs, rhs1, rhs2
+	cdef double oldscore, ls, rs, os
+	cdef bint foundbetter = False
+	cdef Rule rule
+	cdef Terminal terminal
+	cdef unicode word
+	outside[start.label, 0, lensent] = 1.0
+	print "outside",
+	for span in range(lensent, 0, -1):
+		print span,
+		sys.stdout.flush()
+		for left in range(1 + lensent - span):
+			if left == lensent: continue
 			right = left + span
 			# unary
-			for lhs in range(len(grammar.toid)):
-				os = outside[lhs, left, right]
-				if isinf(os): continue
-				for rule in grammar.unary:
-					if rule.lhs != lhs: continue
-					prob = os + rule.prob
-					if (prob < outside[rule.rhs1, left, right]
-						and isfinite(inside[rule.rhs1, left, right])):
-						outside[rule.rhs1, left, right] = prob
-			# binary-left
-			for lhs, rules in enumerate(grammar.binaryleft):
-				min1 = minsplitright[lhs, left]
-				if right < min1: continue
-				for rule in rules:
-					os = outside[rule.lhs, left, right]
-					if isinf(os): continue
-					max1 = minsplitleft[rule.rhs2][right]
-					if max1 < min1: continue
-					if max1 - min1 > 2:
-						min2 = maxsplitleft[rule.rhs2, right]
-						if min2 > min1: min1 = min2
-						if max1 < min1: continue
-						max2 = maxsplitright[rule.rhs1, left]
-						if max2 < max1: max1 = max2
-						if max1 < min1: continue
-					for split in range(min1, max1 + 1):
-						ls = inside[rule.rhs1, left, split]
-						if isinf(ls): continue
-						rs = inside[rule.rhs2, split, right]
-						if isinf(rs): continue
-						outside[rule.rhs1, left, split] += rule.prob + rs + os
-						outside[rule.rhs2, split, right] += rule.prob + ls + os
-			# binary-right
-			for lhs, rules in enumerate(grammar.binaryright):
-				max1 = minsplitleft[lhs, right]
-				if max1 < left: continue
+			for rule in grammar.unary:
+				os = outside[rule.lhs, left, right]
+				if os == 0.0: continue
+				outside[rule.rhs1, left, right] += os * rule.prob
+			# binary
+			for lhs, rules in enumerate(grammar.binary):
 				for rule in rules:
 					os = outside[lhs, left, right]
-					if isinf(os): continue
-					min1 = minsplitright[rule.rhs1][left]
-					if max1 < min1: continue
-					if max1 - min1 > 2:
-						min2 = maxsplitleft[rule.rhs2, right]
-						if min2 > min1: min1 = min2
-						if max1 < min1: continue
-						max2 = maxsplitright[rule.rhs1, left]
-						if max2 < max1: max1 = max2
-						if max1 < min1: continue
-					for split in range(min1, max1 + 1):
+					if os == 0.0: continue
+					narrowr = minsplitright[rule.rhs1, left]
+					#if narrowr >= right: continue
+					narrowl = minsplitleft[rule.rhs2, right]
+					#if narrowl < narrowr: continue
+					widel = maxsplitleft[rule.rhs2, right]
+					minmid = smax(narrowr, widel)
+					wider = maxsplitright[rule.rhs1, left]
+					maxmid = smin(wider, narrowl) + 1
+					#for split in range(minmid, maxmid):
+					for split in range(left + 1, right):
 						ls = inside[rule.rhs1, left, split]
-						if isinf(ls): continue
+						if ls == 0.0: continue
 						rs = inside[rule.rhs2, split, right]
-						if isinf(rs): continue
-						outside[rule.rhs1, left, split] += rule.prob + rs + os
-						outside[rule.rhs2, split, right] += rule.prob + ls + os
+						if rs == 0.0: continue
+						outside[rule.rhs1, left, split] += rule.prob * rs * os
+						outside[rule.rhs2, split, right] += rule.prob * ls * os
+	print
 	return outside
 
 # to avoid overhead of __init__ and __cinit__ constructors
@@ -266,7 +345,7 @@ cdef inline Edge new_Edge(double inside, Rule rule, short split):
 cdef inline short smax(short a, short b): return a if a >= b else b
 cdef inline short smin(short a, short b): return a if a <= b else b
 
-def readbitpargrammar(rules, lexiconfile, unknownwords, normalize=True):
+def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, normalize=True):
 	""" Reads grammars in bitpar's format; this one is actually less fussy
 	about the difference between tabs and spaces. Does require a binarized
 	grammar."""
@@ -321,9 +400,13 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, normalize=True):
 	print "%d words\nparameter estimation..." % (len(lexicon)),
 	sys.stdout.flush()
 	if normalize:
-		# turn rule frequencies into relative frequencies (as log probs)
-		for prods in [unary, lexical] + binary:
-			for a in prods: a.prob = -log(a.prob / fd[a.lhs])
+		# turn rule frequencies into relative frequencies
+		if logprob:
+			for prods in [unary, lexical] + binary:
+				for a in prods: a.prob = -log(a.prob / fd[a.lhs])
+		else:
+			for prods in [unary, lexical] + binary:
+				for a in prods: a.prob /= fd[a.lhs]
 	for a in unary:
 		#prevent cycles
 		if a.prob == 0.0: a.prob = 0.0001
@@ -362,6 +445,14 @@ def logsum(list logprobs):
 	#NB: this version deals with and returns negative logprobs.
 	maxprob = min(logprobs)
 	return maxprob - log(sum([exp(maxprob - prob) for prob in logprobs]))
+
+def pprint_matrix(matrix, sent, tolabel):
+	for lhs in tolabel:
+		for left in range(len(sent)):
+			for right in range(left + 1, len(sent) + 1):
+				if matrix[lhs, left, right]:
+					print "%s[%d:%d] = %f" % (
+						tolabel[lhs], left, right, matrix[lhs, left, right])
 
 def pprint_chart(chart, sent, tolabel):
 	""" `pretty print' a chart. """
