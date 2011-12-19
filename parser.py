@@ -10,6 +10,7 @@ from coarsetofine import whitelistfromkbest, whitelistfromposteriors
 from disambiguation import marginalize
 
 def mainsimple(unknownwords):
+	k = 1
 	grammar = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords)
 	if len(sys.argv) >= 4: input = open(sys.argv[3])
 	else: input = sys.stdin
@@ -24,17 +25,20 @@ def mainsimple(unknownwords):
 		print "parsing:", n, " ".join(sent),
 		sys.stdout.flush()
 		chart, viterbi = parse(sent, grammar, None)
-		start = ChartItem(grammar.toid["TOP"], 0, len(sent))
+		#cat = grammar.toid["TOP"]
+		cat = viterbi[:,0,len(sent)].argmin()	# best scoring category
+		start = ChartItem(cat, 0, len(sent))
 		#pprint_chart(chart, sent, grammar.tolabel)
-		parsetrees = lazykbest(chart, start, 50, grammar.tolabel, sent)
+		parsetrees = lazykbest(chart, start, k, grammar.tolabel, sent)
 		assert len(parsetrees) == len(set(parsetrees))
 		assert len(parsetrees) == len(set(tree for tree, prob in parsetrees))
 		if start in chart:
-			out.writelines("vitprob=%.16g\n%s\n" % (exp(-prob), tree)
+			#out.writelines("vitprob=%.16g\n%s\n" % (exp(-prob), tree)
+			out.writelines("%s\n" % tree
 				for tree, prob in parsetrees)
 		else:
 			out.write("No parse for \"%s\"\n" % " ".join(sent))
-		out.write("\n")
+		#out.write("\n")
 		out.flush()
 		times.append(time.clock())
 		print times[-1] - times[-2], "s"
@@ -83,7 +87,6 @@ def mainctf(unknownwords):
 		#coarsechart[:,:len(sent),:len(sent)+1] = np.inf
 		#chart, coarsechart = parse(sent, coarse, coarsechart)
 		inside, outside = doinsideoutside(sent, coarse, inside, outside)
-		print "outside min max", outside.min(), outside.max()
 		#print "inside"; pprint_matrix(inside, sent, coarse.tolabel)
 		#print "outside"; pprint_matrix(outside, sent, coarse.tolabel)
 		#if start in chart:

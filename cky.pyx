@@ -13,7 +13,7 @@ def parse(list sent, Grammar grammar, whitelist):
 	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
 	cdef long numsymbols = len(grammar.toid), lhs
 	cdef double oldscore, prob
-	cdef bint foundbetter = False
+	cdef bint foundbetter = False 
 	cdef Rule rule
 	cdef Terminal terminal
 	cdef dict chart = {}
@@ -41,10 +41,12 @@ def parse(list sent, Grammar grammar, whitelist):
 	else: viterbi = whitelist
 	# assign POS tags
 	for left in range(lensent):
+		print 1, # == span
 		right = left + 1
+		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
 		for terminal in <list>grammar.lexical:
-			word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
-			if terminal.word == word:
+			if (not isnan(viterbi[terminal.lhs, left, right]) and
+				terminal.word == word):
 				viterbi[terminal.lhs, left, right] = terminal.prob
 				chart[new_ChartItem(terminal.lhs, left, right)] = [
 					new_Edge(terminal.prob, terminal, right)]
@@ -79,9 +81,26 @@ def parse(list sent, Grammar grammar, whitelist):
 						minsplitright[rule.lhs, left] = right
 					if right > maxsplitright[rule.lhs, left]:
 						maxsplitright[rule.lhs, left] = right
-	for span in range(1, lensent + 1):
+	
+	for span in range(2, lensent + 1):
 		print span,
 		sys.stdout.flush()
+	
+		# loop over all non-pruned indices. this appears to be slow.
+		#labels, leftidx, rightidx = np.isinf(viterbi[:,:lensent,:lensent+1]).nonzero()
+		#indices = (rightidx - leftidx).argsort()
+		#prevspan = 0
+		#for idx in indices:
+		#	lhs = labels[idx]
+		#	left = leftidx[idx]
+		#	right = rightidx[idx]
+		#	span = right - left
+		#	if span > prevspan:
+		#		prevspan = span
+		#		print span,
+		#		sys.stdout.flush()
+		#	for rule in <list>(grammar.binary[lhs]):
+
 		# constituents from left to right
 		for left in range(0, lensent - span + 1):
 			right = left + span
@@ -89,6 +108,7 @@ def parse(list sent, Grammar grammar, whitelist):
 			for lhs, rules in enumerate(<list>grammar.binary):
 				if isnan(viterbi[lhs, left, right]): continue
 				for rule in <list>rules:
+					#if not (np.isfinite(viterbi[rule.rhs1,left,left+1:right]).any() and np.isfinite(viterbi[rule.rhs2,left:right-1,right]).any()): continue
 					narrowr = minsplitright[rule.rhs1, left]
 					if narrowr >= right: continue
 					narrowl = minsplitleft[rule.rhs2, right]
@@ -125,7 +145,6 @@ def parse(list sent, Grammar grammar, whitelist):
 							maxsplitright[lhs, left] = right
 
 			# unary rules
-			if span == 1: continue
 			for rule in <list>grammar.unary:
 				if (not isnan(viterbi[rule.lhs, left, right])
 					and isfinite(viterbi[rule.rhs1, left, right])):

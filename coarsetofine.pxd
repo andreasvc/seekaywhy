@@ -19,6 +19,9 @@ cpdef whitelistfromkbest(dict chart,
 		ChartItem goal, Grammar coarse, Grammar fine, int k,
 			np.ndarray[np.double_t, ndim=3] whitelist, int maxlen)
 
+@cython.locals(
+	label=cython.long,
+	lensent=cython.short)
 cpdef whitelistfromposteriors(np.ndarray[np.double_t, ndim=3] inside,
 	np.ndarray[np.double_t, ndim=3] outside,
 	ChartItem goal,

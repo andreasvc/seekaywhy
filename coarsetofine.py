@@ -25,16 +25,23 @@ def whitelistfromposteriors(inside, outside, goal, coarse, fine, finechart, maxl
 	threshold. """
 	lensent = goal.right
 	sentprob = inside[goal.label, 0, lensent]
-	print "sentprob=%g" % sentprob
+	print "sentprob=%g" % sentprob,
 	numsymbols = len(coarse.toid)
-	posterior = (inside * outside) / sentprob
-	inside[:,:lensent,:lensent + 1] = np.inf
-	inside[posterior < threshold] = np.NAN
-	nonzero = (posterior != 0.0).sum()
-	print "items pruned", nonzero - (posterior >= threshold).sum(), "of", nonzero, "nonzero coarse items;", "items left", (posterior >= threshold).sum()
-	for label, id in fine.toid.iteritems():
-		finechart[id] = inside[coarse.toid[removeids.sub("", label)]]
-	
+	posterior = (inside[:,:lensent,:lensent+1]
+			* outside[:,:lensent,:lensent+1]) / sentprob
+	inside[:,:lensent,:lensent + 1] = np.NAN
+	inside[posterior > threshold] = np.inf
+	print " ", (posterior > threshold).sum(),
+	print "of", (posterior != 0.0).sum(),
+	print "nonzero coarse items left",
+	#labels, leftidx, rightidx = (posterior[:,:lensent,:lensent+1] > threshold).nonzero()
+	#for label, left, right in zip(labels, leftidx, rightidx):
+	#	for x in mapping[label]:
+	#		finechart[x,left,right] = inside[label,left,right]
+	for label in range(len(fine.toid)):
+		finechart[label,:lensent,:lensent+1] = inside[coarse.toid[removeids.sub("", fine.tolabel[label])],:lensent,:lensent+1]
+	print "copied chart."
+
 def whitelistfromposteriors1(chart, viterbi, goal, coarse, fine, whitelist, threshold):
 	""" compute posterior probabilities and prune away cells below some
 	threshold. """
