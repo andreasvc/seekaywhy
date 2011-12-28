@@ -1,7 +1,7 @@
 """ Probabilistic CKY parser for PCFGs """
 import sys, codecs
 from collections import defaultdict
-from math import log, exp
+from nltk import Tree
 import numpy as np
 from agenda cimport Agenda
 encoding = "utf-8"
@@ -40,8 +40,8 @@ def parse(list sent, Grammar grammar, whitelist):
 		(numsymbols, lensent, (lensent+1)))
 	else: viterbi = whitelist
 	# assign POS tags
+	print 1, # == span
 	for left in range(lensent):
-		print 1, # == span
 		right = left + 1
 		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
 		for terminal in <list>grammar.lexical:
@@ -472,6 +472,151 @@ def pprint_matrix(matrix, sent, tolabel):
 				if matrix[lhs, left, right]:
 					print "%s[%d:%d] = %f" % (
 						tolabel[lhs], left, right, matrix[lhs, left, right])
+
+def getgrammarmapping(coarse, fine):
+	""" producing a mapping of coarse rules to sets of fine rules;
+	e.g. mapping["S", "NP", "VP"] == set(Rule(...), Rule(...), ...) """
+	mapping = {}
+	for rule in coarse.unary:
+		mapping[coarse.tolabel[rule.lhs], coarse.tolabel[rule.rhs1]] = []
+	for rules in coarse.binary:
+		for rule in rules:
+			mapping[coarse.tolabel[rule.lhs],
+				coarse.tolabel[rule.rhs1], coarse.tolabel[rule.rhs2]] = []
+	for rule in fine.unary:
+		mapping[fine.tolabel[rule.lhs].split("@")[0],
+			fine.tolabel[rule.rhs1].split("@")[0]].append(rule)
+	for rules in fine.binary:
+		for rule in rules:
+			mapping[fine.tolabel[rule.lhs].split("@")[0],
+				fine.tolabel[rule.rhs1].split("@")[0],
+				fine.tolabel[rule.rhs2].split("@")[0]].append(rule)
+	return mapping
+
+def cachingdopparseprob(tree, Grammar grammar, dict mapping, dict cache):
+	""" Given an NLTK tree, compute the DOP parse probability given a
+	DOP reduction. """
+	#from bigfloat import BigFloat, setcontext, quadruple_precision
+	#setcontext(quadruple_precision)
+	#chart = defaultdict(lambda: BigFloat(0))
+	#chart = defaultdict(float)
+	neginf = float('-inf')
+	cdef dict chart = <dict>defaultdict(lambda: neginf)
+	cdef Rule rule
+	cdef Terminal terminal
+
+	for n, word in enumerate(tree.leaves()):
+		for terminal in grammar.lexical:
+			if terminal.word == word:
+				chart[terminal.lhs, n, n+1] = logadd(
+					chart[terminal.lhs, n, n+1], -terminal.prob)
+				#chart[terminal.lhs, n, n+1] += terminal.prob
+		# replace leaves with indices so as to easily find spans
+		tree[tree.leaf_treeposition(n)] = n
+	tree = tree.freeze()
+
+	for node in list(tree.subtrees())[::-1]:
+		if not isinstance(node[0], Tree): continue
+		if node in cache:
+			chart.update(cache[node])
+			continue
+		prod = (node.node,) + tuple(a.node for a in node)
+		left = min(node.leaves())
+		right = max(node.leaves()) + 1
+		if len(node) == 2:
+			split = min(node[1].leaves())
+			for rule in mapping[prod]:
+				chart[rule.lhs, left, right] = logadd(
+					chart[rule.lhs, left, right],
+					(-rule.prob
+					+ chart[rule.rhs1, left, split]
+					+ chart[rule.rhs2, split, right]))
+				#chart[rule.lhs, left, right] += (rule.prob
+				#	* chart[rule.rhs1, left, split]
+				#	* chart[rule.rhs2, split, right])
+		elif len(node) == 1:
+			for rule in mapping[prod]:
+				chart[rule.lhs, left, right] = logadd(
+					chart[rule.lhs, left, right],
+					-rule.prob + chart[rule.rhs1, left, right])
+				#chart[rule.lhs, left, right] += (rule.prob
+				#		* chart[rule.rhs1, left, right])
+		else: raise ValueError("expected binary tree.")
+		cache[node] = chart.items()
+		#print prod[0], left, right, chart[grammar.toid[prod[0]], left, right]
+	return chart[grammar.toid[tree.node], 0, len(tree.leaves())]
+
+def doplexprobs(tree, Grammar grammar):
+	neginf = float('-inf')
+	cdef dict chart = <dict>defaultdict(lambda: neginf)
+	cdef Terminal terminal
+
+	for n, word in enumerate(tree.leaves()):
+		for terminal in grammar.lexical:
+			if terminal.word == word:
+				chart[terminal.lhs, n, n+1] = logadd(
+					chart[terminal.lhs, n, n+1], -terminal.prob)
+				#chart[terminal.lhs, n, n+1] += terminal.prob
+	return chart
+
+def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
+	""" Given an NLTK tree, compute the DOP parse probability given a
+	DOP reduction. """
+	#from bigfloat import BigFloat, setcontext, quadruple_precision
+	#setcontext(quadruple_precision)
+	#chart = defaultdict(lambda: BigFloat(0))
+	#chart = defaultdict(float)
+	neginf = float('-inf')
+	cdef dict chart = <dict>defaultdict(lambda: neginf)
+	cdef Rule rule
+	cdef Terminal terminal
+	
+	# add all possible POS tags
+	chart.update(lexchart)
+	for n, word in enumerate(tree.leaves()):
+		# replace leaves with indices so as to easily find spans
+		tree[tree.leaf_treeposition(n)] = n
+
+	for node in list(tree.subtrees())[::-1]:
+		if not isinstance(node[0], Tree): continue
+		prod = (node.node,) + tuple(a.node for a in node)
+		left = min(node.leaves())
+		right = max(node.leaves()) + 1
+		if len(node) == 2:
+			split = min(node[1].leaves())
+			for rule in mapping[prod]:
+				chart[rule.lhs, left, right] = logadd(
+					chart[rule.lhs, left, right],
+					(-rule.prob
+					+ chart[rule.rhs1, left, split]
+					+ chart[rule.rhs2, split, right]))
+				#chart[rule.lhs, left, right] += (rule.prob
+				#	* chart[rule.rhs1, left, split]
+				#	* chart[rule.rhs2, split, right])
+		elif len(node) == 1:
+			for rule in mapping[prod]:
+				chart[rule.lhs, left, right] = logadd(
+					chart[rule.lhs, left, right],
+					-rule.prob + chart[rule.rhs1, left, right])
+				#chart[rule.lhs, left, right] += (rule.prob
+				#		* chart[rule.rhs1, left, right])
+		else: raise ValueError("expected binary tree.")
+		#print prod[0], left, right, chart[grammar.toid[prod[0]], left, right]
+	return chart[grammar.toid[tree.node], 0, len(tree.leaves())]
+
+cdef double log1e200 = log(1e200)
+cdef inline logadd(double x, double y):
+	if isinf(x): return y
+	if isinf(y): return x
+	# If one value is much smaller than the other, keep the larger value.
+	if x < (y - log1e200): return y
+	if y < (x - log1e200): return x
+	diff = y - x
+	assert not isinf(diff)
+	if isinf(exp(diff)):	# difference is too large
+		return x if x > y else y
+	# otherwise return the sum.
+	return x + log(1.0 + exp(diff))
 
 def pprint_chart(chart, sent, tolabel):
 	""" `pretty print' a chart. """
