@@ -41,6 +41,19 @@ cpdef whitelistfromposteriors1(
 	double threshold)
 
 @cython.locals(
+	label=cython.long,
+	lensent=cython.short)
+cpdef whitelistfromposteriors2(np.ndarray[np.double_t, ndim=3] inside,
+	np.ndarray[np.double_t, ndim=3] outside,
+	ChartItem goal,
+	Grammar coarse,
+	Grammar fine,
+	dict mapping,
+	short maxlen,
+	double threshold)
+
+
+@cython.locals(
 	entry=Entry,
 	e=Edge,
 	D=dict,

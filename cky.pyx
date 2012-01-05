@@ -169,6 +169,141 @@ def parse(list sent, Grammar grammar, whitelist):
 	print
 	return chart, viterbi
 
+def parse_nomatrix(list sent, Grammar grammar, chart):
+	""" A CKY parser modeled after Bodenstab's `fast grammar loop.'
+		and the Stanford parser. """
+	cdef short left, right, mid, span, lensent = len(sent)
+	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
+	cdef long numsymbols = len(grammar.toid), lhs
+	cdef double oldscore, prob, infinity = float('infinity')
+	cdef bint foundbetter = False 
+	cdef Rule rule
+	cdef Terminal terminal
+	cdef unicode word
+	cdef dict cell
+	# matrices for the filter which gives minima and maxima for splits
+	cdef np.ndarray[np.int16_t, ndim=2] minsplitleft = np.array([-1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)
+		).reshape(numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] maxsplitleft = np.array([lensent+1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
+		numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] minsplitright = np.array([lensent + 1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)
+		).reshape(numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
+		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
+		numsymbols, lensent + 1)
+	if chart is None: chart = {}
+	# assign POS tags
+	print 1, # == span
+	for left in range(lensent):
+		right = left + 1
+		cell = chart[left][right]
+		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
+		for terminal in <list>grammar.lexical:
+			if terminal.lhs in cell and terminal.word == word:
+				cell[terminal.lhs] = [new_Edge(terminal.prob, terminal, right)]
+				# update filter
+				if left > minsplitleft[terminal.lhs, right]:
+					minsplitleft[terminal.lhs, right] = left
+				if left < maxsplitleft[terminal.lhs, right]:
+					maxsplitleft[terminal.lhs, right] = left
+				if right < minsplitright[terminal.lhs, left]:
+					minsplitright[terminal.lhs, left] = right
+				if right > maxsplitright[terminal.lhs, left]:
+					maxsplitright[terminal.lhs, left] = right
+		# unary rules on POS tags 
+		for rule in <list>grammar.unary:
+			if rule.lhs in cell and cell.get(rule.rhs1, False):
+				prob = rule.prob + cell[rule.rhs1][0].inside
+				if not cell[rule.lhs] or prob < cell[rule.lhs][0].inside:
+					cell[rule.lhs].append(new_Edge(prob, rule, right))
+					# switch previous best & new best
+					(cell[rule.lhs][0], cell[rule.lhs][-1]) = (
+						cell[rule.lhs][-1], cell[rule.lhs][0])
+					# update filter
+					if left > minsplitleft[rule.lhs, right]:
+						minsplitleft[rule.lhs, right] = left
+					if left < maxsplitleft[rule.lhs, right]:
+						maxsplitleft[rule.lhs, right] = left
+					if right < minsplitright[rule.lhs, left]:
+						minsplitright[rule.lhs, left] = right
+					if right > maxsplitright[rule.lhs, left]:
+						maxsplitright[rule.lhs, left] = right
+				else:
+					cell[rule.lhs].append(new_Edge(prob, rule, right))
+	
+	for span in range(2, lensent + 1):
+		print span,
+		sys.stdout.flush()
+	
+		# constituents from left to right
+		for left in range(0, lensent - span + 1):
+			right = left + span
+			cell = chart[left][right]
+			# binary rules 
+			for lhs, rules in enumerate(<list>grammar.binary):
+				if lhs not in cell: continue
+				for rule in <list>rules:
+					narrowr = minsplitright[rule.rhs1, left]
+					if narrowr >= right: continue
+					narrowl = minsplitleft[rule.rhs2, right]
+					if narrowl < narrowr: continue
+					widel = maxsplitleft[rule.rhs2, right]
+					minmid = smax(narrowr, widel)
+					wider = maxsplitright[rule.rhs1, left]
+					maxmid = smin(wider, narrowl) + 1
+					oldscore = cell[lhs][0].inside if cell[lhs] else infinity
+					foundbetter = False
+					for mid in range(minmid, maxmid):
+						if (chart[left][mid].get(rule.rhs1, False)
+							and chart[mid][right].get(rule.rhs2, False)):
+							prob = (rule.prob
+								+ chart[left][mid][rule.rhs1][0].inside
+								+ chart[mid][right][rule.rhs2][0].inside)
+							if not cell[lhs] or prob < cell[lhs][0].inside:
+								foundbetter = True
+								cell[lhs].append(new_Edge(prob, rule, mid))
+								# switch previous best & new best
+								(cell[lhs][0], cell[lhs][-1]) = (
+									cell[lhs][-1], cell[lhs][0])
+							else:
+								cell[lhs].append(new_Edge(prob, rule, mid))
+					# update filter
+					if foundbetter and isinf(oldscore):
+						if left > minsplitleft[lhs, right]:
+							minsplitleft[lhs, right] = left
+						if left < maxsplitleft[lhs, right]:
+							maxsplitleft[lhs, right] = left
+						if right < minsplitright[lhs, left]:
+							minsplitright[lhs, left] = right
+						if right > maxsplitright[lhs, left]:
+							maxsplitright[lhs, left] = right
+
+			# unary rules
+			for rule in <list>grammar.unary:
+				if rule.lhs in cell and cell.get(rule.rhs1, False):
+					prob = rule.prob + cell[rule.rhs1][0].inside
+					if not cell[rule.lhs] or prob < cell[rule.lhs][0].inside:
+						cell[rule.lhs].append(new_Edge(prob, rule, right))
+						# switch previous best & new best
+						(cell[rule.lhs][0], cell[rule.lhs][-1]) = (
+							cell[rule.lhs][-1], cell[rule.lhs][0])
+						# update filter
+						if left > minsplitleft[rule.lhs, right]:
+							minsplitleft[rule.lhs, right] = left
+						if left < maxsplitleft[rule.lhs, right]:
+							maxsplitleft[rule.lhs, right] = left
+						if right < minsplitright[rule.lhs, left]:
+							minsplitright[rule.lhs, left] = right
+						if right > maxsplitright[rule.lhs, left]:
+							maxsplitright[rule.lhs, left] = right
+					else:
+						cell[rule.lhs].append(new_Edge(prob, rule, right))
+	print
+	return chart
+
 def doinsideoutside(list sent, Grammar grammar, inside, outside):
 	lensent = len(sent); numsymbols = len(grammar.toid)
 	start = ChartItem(grammar.toid["TOP"], 0, lensent)
@@ -364,7 +499,7 @@ cdef inline Edge new_Edge(double inside, Rule rule, short split):
 cdef inline short smax(short a, short b): return a if a >= b else b
 cdef inline short smin(short a, short b): return a if a <= b else b
 
-def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, normalize=True):
+def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True):
 	""" Reads grammars in bitpar's format; this one is actually less fussy
 	about the difference between tabs and spaces. Does require a binarized
 	grammar."""
@@ -418,7 +553,7 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, normalize=
 			fd[lhs] += freq
 	print "%d words\nparameter estimation..." % (len(lexicon)),
 	sys.stdout.flush()
-	if normalize:
+	if freqs:
 		# turn rule frequencies into relative frequencies
 		if logprob:
 			for prods in [unary, lexical] + binary:

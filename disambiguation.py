@@ -6,13 +6,13 @@ from bisect import bisect_right
 from collections import defaultdict
 from operator import itemgetter
 from nltk import Tree
-from kbest import * #lazykbest
+from kbest1 import * #lazykbest
 try:
 	import cython
 	assert cython.compiled
 except: from containers import * #getlabel, getvec
 infinity = float('infinity')
-removeids = re.compile("@[0-9]+")
+removeids = re.compile("@[0-9_]+")
 
 def sldop(chart, start, sent, tags, dopgrammar, secondarymodel, m, sldop_n, sample=False, both=False):
 	""" `proper' method for sl-dop. parses sentence once more to find shortest

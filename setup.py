@@ -17,6 +17,7 @@ ext_modules = [
 	Extension("cky",			["cky.pyx",  "cky.pxd"],
 								#extra_compile_args=["-g"], extra_link_args=["-g"]
 								),
+	Extension("kbest1",			["kbest1.py", "kbest1.pxd"]),
 	Extension("kbest",			["kbest.py", "kbest.pxd"],
 								#extra_compile_args=["-g"], extra_link_args=["-g"]
 								),

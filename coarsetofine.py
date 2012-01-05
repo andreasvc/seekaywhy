@@ -13,12 +13,33 @@ except NameError:
 	from kbest import * #lazykthbest 
 
 infinity = float('infinity')
-removeids = re.compile("@[0-9]+")
+removeids = re.compile("@[0-9_]+")
 removeparentannot = re.compile("\^<.*>")
 reducemarkov = [re.compile("\|<[^>]*>"),
 				re.compile("\|<([^->]*)-?[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*)-?[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*-[^->]*)-?[^>]*>")]
+
+def whitelistfromposteriors2(inside, outside, goal, coarse, fine, mapping, maxlen, threshold):
+	""" compute posterior probabilities and prune away cells below some
+	threshold. """
+	lensent = goal.right
+	sentprob = inside[goal.label, 0, lensent]
+	print "sentprob=%g" % sentprob,
+	numsymbols = len(coarse.toid)
+	posterior = (inside[:,:lensent,:lensent+1]
+			* outside[:,:lensent,:lensent+1]) / sentprob
+
+	print " ", (posterior > threshold).sum(),
+	print "of", (posterior != 0.0).sum(),
+	print "nonzero coarse items left",
+	finechart = [[{} for _ in range(maxlen)] for _ in range(maxlen)]
+	labels, leftidx, rightidx = (posterior[:,:lensent,:lensent+1] > threshold).nonzero()
+	for label, left, right in zip(labels, leftidx, rightidx):
+		for lhs in mapping[label]:
+			finechart[left][right][lhs] = []
+	print "copied chart."
+	return finechart
 
 def whitelistfromposteriors(inside, outside, goal, coarse, fine, finechart, maxlen, threshold):
 	""" compute posterior probabilities and prune away cells below some

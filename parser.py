@@ -1,14 +1,16 @@
-import sys, time
+import sys, time, re
 from operator import itemgetter
 from math import exp, log, isinf
 from heapq import nlargest
 import numpy as np
 from nltk import Tree
-from cky import parse, readbitpargrammar, doinsideoutside, pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, cachingdopparseprob, doplexprobs
+from cky import parse, parse_nomatrix, readbitpargrammar, doinsideoutside, pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, cachingdopparseprob, doplexprobs
 from kbest import lazykbest
+from kbest1 import lazykbest as lazykbest1, lazykthbest
 from containers import ChartItem
-from coarsetofine import whitelistfromkbest, whitelistfromposteriors
+from coarsetofine import whitelistfromkbest, whitelistfromposteriors, whitelistfromposteriors2
 from disambiguation import marginalize
+removeids = re.compile("@[0-9_]+")
 
 def mainsimple(unknownwords):
 	k = 1
@@ -60,7 +62,7 @@ def mainctf(unknownwords):
 	maxlen = 65
 	unparsed = 0
 	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords, logprob=False)
-	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, normalize=True)
+	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, freqs=False)
 	for a in fine.toid:
 		assert a.split("@")[0] in coarse.toid, "%s not in coarse grammar" % a
 	if len(sys.argv) >= 6: input = open(sys.argv[5])
@@ -77,9 +79,11 @@ def mainctf(unknownwords):
 	outside = np.array([0.0], dtype='d').repeat(
 					maxlen * (maxlen + 1) * len(coarse.toid)
 					).reshape((len(coarse.toid), maxlen, maxlen + 1))
-	finechart = np.array([np.NAN], dtype='d').repeat(
-					maxlen * (maxlen + 1) * len(fine.toid)
-					).reshape((len(fine.toid), maxlen, maxlen + 1))
+	#finechart = np.array([np.NAN], dtype='d').repeat(
+	#				maxlen * (maxlen + 1) * len(fine.toid)
+	#				).reshape((len(fine.toid), maxlen, maxlen + 1))
+	mapping = nonterminalmapping(coarse, fine)
+
 	for n, a in enumerate(input.read().split("\n\n")):
 		if not a.strip(): continue
 		sent = a.splitlines()
@@ -98,11 +102,20 @@ def mainctf(unknownwords):
 			print "pruning ...",
 			sys.stdout.flush()
 			#whitelistfromkbest(chart, start, coarse, fine, k, finechart, maxlen)
-			whitelistfromposteriors(inside, outside, start, coarse, fine, finechart, maxlen, threshold)
-			chart, finechart = parse(sent, fine, finechart)
+			finechart = whitelistfromposteriors2(inside, outside, start, coarse, fine, mapping, maxlen, threshold)
+			#chart, finechart = parse(sent, fine, finechart)
+			chart = parse_nomatrix(sent, fine, finechart)
 			start = ChartItem(fine.toid["TOP"], 0, len(sent))
-			assert start in chart, "sentence covered by coarse grammar could not be parsed by fine grammar"
 			#pprint_chart(chart, sent, fine.tolabel)
+			#for l, _ in enumerate(chart):
+			#	for r, _ in enumerate(chart[l]):
+			#		for label in chart[l][r]:
+			#			print fine.tolabel[label], label, l, r,
+			#			if chart[l][r][label]: print chart[l][r][label][0]
+			#			else: print []
+
+			#assert start in chart, "sentence covered by coarse grammar could not be parsed by fine grammar"
+			assert chart[0][len(sent)][fine.toid["TOP"]], "sentence covered by coarse grammar could not be parsed by fine grammar"
 			# MPP
 			parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m).items()
 			# print all parsetrees
@@ -134,7 +147,7 @@ def mainrerank(unknownwords):
 	maxlen = 65
 	unparsed = 0
 	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords, logprob=True)
-	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, normalize=True, logprob=True)
+	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, freqs=False, logprob=True)
 	for a in fine.toid:
 		assert a.split("@")[0] in coarse.toid, "%s not in coarse grammar" % a
 	if len(sys.argv) >= 6: input = open(sys.argv[5])
@@ -177,6 +190,14 @@ def mainrerank(unknownwords):
 	print "unparsed sentences:", unparsed
 	print "finished"
 	out.close()
+
+def nonterminalmapping(coarse, fine):
+	mapping = {}
+	for a in coarse.tolabel:
+		mapping[a] = set()
+	for a, b in fine.toid.items():
+		mapping[coarse.toid[removeids.sub("", a)]].add(b)
+	return mapping
 
 def main():
 	if "-u" in sys.argv:
