@@ -6,7 +6,6 @@ import numpy as np
 from nltk import Tree
 from cky import parse, parse_nomatrix, readbitpargrammar, doinsideoutside, pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, cachingdopparseprob, doplexprobs
 from kbest import lazykbest
-from kbest1 import lazykbest as lazykbest1, lazykthbest
 from containers import ChartItem
 from coarsetofine import whitelistfromkbest, whitelistfromposteriors, whitelistfromposteriors2
 from disambiguation import marginalize
@@ -28,14 +27,9 @@ def mainsimple(unknownwords):
 		print "parsing:", n, " ".join(sent),
 		sys.stdout.flush()
 		chart, viterbi = parse(sent, grammar, None)
-		cat = grammar.toid["TOP"]
-		#cat = viterbi[:,0,len(sent)].argmin()	# best scoring category
-		#while "|<" in grammar.tolabel[cat]:
-		#	viterbi[cat,0,len(sent)] = np.inf
-		#	cat = viterbi[:,0,len(sent)].argmin()	# best scoring category
-		start = ChartItem(cat, 0, len(sent))
+		start = ChartItem(grammar.toid["TOP"], 0, len(sent))
 		#pprint_chart(chart, sent, grammar.tolabel)
-		if start in chart:
+		if chart[0][len(sent)].get(grammar.toid["TOP"], False):
 			parsetrees = lazykbest(chart, start, k, grammar.tolabel, sent)
 			assert len(parsetrees) == len(set(parsetrees))
 			assert len(parsetrees) == len(set(tree for tree, prob in parsetrees))
@@ -97,7 +91,7 @@ def mainctf(unknownwords):
 		inside, outside = doinsideoutside(sent, coarse, inside, outside)
 		#print "inside"; pprint_matrix(inside, sent, coarse.tolabel)
 		#print "outside"; pprint_matrix(outside, sent, coarse.tolabel)
-		#if start in chart:
+		#if chart[0][len(sent)].get(coarse.toid["TOP"], False):
 		if inside[coarse.toid["TOP"], 0, len(sent)] != 0.0:
 			print "pruning ...",
 			sys.stdout.flush()
@@ -165,7 +159,7 @@ def mainrerank(unknownwords):
 		print "parsing:", n, " ".join(sent)
 		start = ChartItem(coarse.toid["TOP"], 0, len(sent))
 		chart, _ = parse(sent, coarse, None); print
-		if start in chart:
+		if chart[0][len(sent)].get(coarse.toid["TOP"], False):
 			trees = []
 			for m, (tree, prob) in enumerate(lazykbest(chart, start, k, coarse.tolabel, sent)):
 				if m == 0: lexchart = doplexprobs(Tree(tree), fine)

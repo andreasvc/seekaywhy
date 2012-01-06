@@ -16,7 +16,7 @@ def parse(list sent, Grammar grammar, whitelist):
 	cdef bint foundbetter = False 
 	cdef Rule rule
 	cdef Terminal terminal
-	cdef dict chart = {}
+	cdef list chart = [[{} for _ in range(lensent+1)] for _ in range(lensent)]
 	cdef unicode word
 	# the viterbi chart is initially filled with infinite log probabilities,
 	# cells which are to be blocked contain NaN.
@@ -48,7 +48,7 @@ def parse(list sent, Grammar grammar, whitelist):
 			if (not isnan(viterbi[terminal.lhs, left, right]) and
 				terminal.word == word):
 				viterbi[terminal.lhs, left, right] = terminal.prob
-				chart[new_ChartItem(terminal.lhs, left, right)] = [
+				chart[left][right][terminal.lhs] = [
 					new_Edge(terminal.prob, terminal, right)]
 				# update filter
 				if left > minsplitleft[terminal.lhs, right]:
@@ -65,10 +65,10 @@ def parse(list sent, Grammar grammar, whitelist):
 				and isfinite(viterbi[rule.rhs1, left, right])):
 				prob = rule.prob + viterbi[rule.rhs1, left, right]
 				if isfinite(viterbi[rule.lhs, left, right]):
-					(<list>chart[new_ChartItem(rule.lhs, left,
-						right)]).append(new_Edge(prob, rule, right))
+					chart[left][right][rule.lhs].append(
+						new_Edge(prob, rule, right))
 				else:
-					chart[new_ChartItem(rule.lhs, left, right)] = [
+					chart[left][right][rule.lhs] = [
 						new_Edge(prob, rule, right)]
 				if (prob < viterbi[rule.lhs, left, right]):
 					viterbi[rule.lhs, left, right] = prob
@@ -125,10 +125,10 @@ def parse(list sent, Grammar grammar, whitelist):
 							prob = (rule.prob + viterbi[rule.rhs1, left, mid]
 									+ viterbi[rule.rhs2, mid, right])
 							if isfinite(viterbi[lhs, left, right]):
-								(<list>chart[new_ChartItem(lhs, left, right)
-									]).append(new_Edge(prob, rule, mid))
+								chart[left][right][rule.lhs].append(
+									new_Edge(prob, rule, mid))
 							else:
-								chart[new_ChartItem(lhs, left, right)] = [
+								chart[left][right][rule.lhs] = [
 									new_Edge(prob, rule, mid)]
 							if prob < viterbi[lhs, left, right]:
 								foundbetter = True
@@ -150,10 +150,10 @@ def parse(list sent, Grammar grammar, whitelist):
 					and isfinite(viterbi[rule.rhs1, left, right])):
 					prob = rule.prob + viterbi[rule.rhs1, left, right]
 					if isfinite(viterbi[rule.lhs, left, right]):
-						(<list>chart[new_ChartItem(rule.lhs, left,
-							right)]).append(new_Edge(prob, rule, right))
+						chart[left][right][rule.lhs].append(
+							new_Edge(prob, rule, right))
 					else:
-						chart[new_ChartItem(rule.lhs, left, right)] = [
+						chart[left][right][rule.lhs] = [
 							new_Edge(prob, rule, right)]
 					if prob < viterbi[rule.lhs, left, right]:
 						viterbi[rule.lhs, left, right] = prob
@@ -194,7 +194,8 @@ def parse_nomatrix(list sent, Grammar grammar, chart):
 	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
 		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
 		numsymbols, lensent + 1)
-	if chart is None: chart = {}
+	if chart is None:
+		chart = [[{} for _ in range(lensent)] for _ in range(lensent)]
 	# assign POS tags
 	print 1, # == span
 	for left in range(lensent):
@@ -483,14 +484,55 @@ cdef outsidescores(np.ndarray[np.double_t, ndim=3] inside,
 	print
 	return outside
 
+def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
+	""" Given an NLTK tree, compute the DOP parse probability given a
+	DOP reduction. """
+	#from bigfloat import BigFloat, setcontext, quadruple_precision
+	#setcontext(quadruple_precision)
+	#chart = defaultdict(lambda: BigFloat(0))
+	#chart = defaultdict(float)
+	neginf = float('-inf')
+	cdef dict chart = <dict>defaultdict(lambda: neginf)
+	cdef Rule rule
+	cdef Terminal terminal
+	
+	# add all possible POS tags
+	chart.update(lexchart)
+	for n, word in enumerate(tree.leaves()):
+		# replace leaves with indices so as to easily find spans
+		tree[tree.leaf_treeposition(n)] = n
+
+	for node in list(tree.subtrees())[::-1]:
+		if not isinstance(node[0], Tree): continue
+		prod = (node.node,) + tuple(a.node for a in node)
+		left = min(node.leaves())
+		right = max(node.leaves()) + 1
+		if len(node) == 2:
+			split = min(node[1].leaves())
+			for rule in mapping[prod]:
+				chart[rule.lhs, left, right] = logadd(
+					chart[rule.lhs, left, right],
+					(-rule.prob
+					+ chart[rule.rhs1, left, split]
+					+ chart[rule.rhs2, split, right]))
+				#chart[rule.lhs, left, right] += (rule.prob
+				#	* chart[rule.rhs1, left, split]
+				#	* chart[rule.rhs2, split, right])
+		elif len(node) == 1:
+			for rule in mapping[prod]:
+				chart[rule.lhs, left, right] = logadd(
+					chart[rule.lhs, left, right],
+					-rule.prob + chart[rule.rhs1, left, right])
+				#chart[rule.lhs, left, right] += (rule.prob
+				#		* chart[rule.rhs1, left, right])
+		else: raise ValueError("expected binary tree.")
+		#print prod[0], left, right, chart[grammar.toid[prod[0]], left, right]
+	return chart[grammar.toid[tree.node], 0, len(tree.leaves())]
+
+
 # to avoid overhead of __init__ and __cinit__ constructors
 # belongs in containers but putting it here gives
 # a better chance of successful inlining
-cdef inline ChartItem new_ChartItem(unsigned int label, short left, short right):
-	cdef ChartItem item = ChartItem.__new__(ChartItem)
-	item.label = label; item.left = left; item.right = right
-	return item
-
 cdef inline Edge new_Edge(double inside, Rule rule, short split):
 	cdef Edge edge = Edge.__new__(Edge)
 	edge.inside = inside; edge.rule = rule; edge.split = split
@@ -600,14 +642,6 @@ def logsum(list logprobs):
 	maxprob = min(logprobs)
 	return maxprob - log(sum([exp(maxprob - prob) for prob in logprobs]))
 
-def pprint_matrix(matrix, sent, tolabel):
-	for lhs in tolabel:
-		for left in range(len(sent)):
-			for right in range(left + 1, len(sent) + 1):
-				if matrix[lhs, left, right]:
-					print "%s[%d:%d] = %f" % (
-						tolabel[lhs], left, right, matrix[lhs, left, right])
-
 def getgrammarmapping(coarse, fine):
 	""" producing a mapping of coarse rules to sets of fine rules;
 	e.g. mapping["S", "NP", "VP"] == set(Rule(...), Rule(...), ...) """
@@ -694,51 +728,6 @@ def doplexprobs(tree, Grammar grammar):
 				#chart[terminal.lhs, n, n+1] += terminal.prob
 	return chart
 
-def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
-	""" Given an NLTK tree, compute the DOP parse probability given a
-	DOP reduction. """
-	#from bigfloat import BigFloat, setcontext, quadruple_precision
-	#setcontext(quadruple_precision)
-	#chart = defaultdict(lambda: BigFloat(0))
-	#chart = defaultdict(float)
-	neginf = float('-inf')
-	cdef dict chart = <dict>defaultdict(lambda: neginf)
-	cdef Rule rule
-	cdef Terminal terminal
-	
-	# add all possible POS tags
-	chart.update(lexchart)
-	for n, word in enumerate(tree.leaves()):
-		# replace leaves with indices so as to easily find spans
-		tree[tree.leaf_treeposition(n)] = n
-
-	for node in list(tree.subtrees())[::-1]:
-		if not isinstance(node[0], Tree): continue
-		prod = (node.node,) + tuple(a.node for a in node)
-		left = min(node.leaves())
-		right = max(node.leaves()) + 1
-		if len(node) == 2:
-			split = min(node[1].leaves())
-			for rule in mapping[prod]:
-				chart[rule.lhs, left, right] = logadd(
-					chart[rule.lhs, left, right],
-					(-rule.prob
-					+ chart[rule.rhs1, left, split]
-					+ chart[rule.rhs2, split, right]))
-				#chart[rule.lhs, left, right] += (rule.prob
-				#	* chart[rule.rhs1, left, split]
-				#	* chart[rule.rhs2, split, right])
-		elif len(node) == 1:
-			for rule in mapping[prod]:
-				chart[rule.lhs, left, right] = logadd(
-					chart[rule.lhs, left, right],
-					-rule.prob + chart[rule.rhs1, left, right])
-				#chart[rule.lhs, left, right] += (rule.prob
-				#		* chart[rule.rhs1, left, right])
-		else: raise ValueError("expected binary tree.")
-		#print prod[0], left, right, chart[grammar.toid[prod[0]], left, right]
-	return chart[grammar.toid[tree.node], 0, len(tree.leaves())]
-
 cdef double log1e200 = log(1e200)
 cdef inline logadd(double x, double y):
 	if isinf(x): return y
@@ -753,21 +742,31 @@ cdef inline logadd(double x, double y):
 	# otherwise return the sum.
 	return x + log(1.0 + exp(diff))
 
+def pprint_matrix(matrix, sent, tolabel):
+	for lhs in tolabel:
+		for left in range(len(sent)):
+			for right in range(left + 1, len(sent) + 1):
+				if matrix[lhs, left, right]:
+					print "%s[%d:%d] = %f" % (
+						tolabel[lhs], left, right, matrix[lhs, left, right])
+
+
 def pprint_chart(chart, sent, tolabel):
 	""" `pretty print' a chart. """
-	cdef ChartItem a
 	cdef Edge edge
 	print "chart:"
-	for a in sorted(chart, key=lambda a: a.left):
-		if not chart[a]: continue
-		print "%s[%d:%d] =>" % (tolabel[a.label], a.left, a.right)
-		for edge in chart[a]:
-			print "%g\t%g" % (exp(-edge.inside), exp(-edge.rule.prob)),
-			if edge.rule.rhs1:
-				print "\t%s[%d:%d]" % (tolabel[edge.rule.rhs1],
-											a.left, edge.split),
-			else:
-				print "\t", repr(sent[a.left]),
-			if edge.rule.rhs2:
-				print "\t%s[%d:%d]" % (tolabel[edge.rule.rhs2], edge.split, a.right),
-			print
+	for left in range(len(sent)):
+		for right in range(left, len(sent)):
+			for label, edges in chart[left][right].items():
+				print "%s[%d:%d] =>" % (tolabel[label], left, right)
+				for edge in edges:
+					print "%g\t%g" % (exp(-edge.inside), exp(-edge.rule.prob)),
+					if edge.rule.rhs1:
+						print "\t%s[%d:%d]" % (tolabel[edge.rule.rhs1],
+													left, edge.split),
+					else:
+						print "\t", repr(sent[left]),
+					if edge.rule.rhs2:
+						print "\t%s[%d:%d]" % (tolabel[edge.rule.rhs2],
+												edge.split, right),
+					print

@@ -22,7 +22,7 @@ reducemarkov = [re.compile("\|<[^>]*>"),
 
 def whitelistfromposteriors2(inside, outside, goal, coarse, fine, mapping, maxlen, threshold):
 	""" compute posterior probabilities and prune away cells below some
-	threshold. """
+	threshold. this version is for use with parse_nomatrix(). """
 	lensent = goal.right
 	sentprob = inside[goal.label, 0, lensent]
 	print "sentprob=%g" % sentprob,
@@ -43,7 +43,8 @@ def whitelistfromposteriors2(inside, outside, goal, coarse, fine, mapping, maxle
 
 def whitelistfromposteriors(inside, outside, goal, coarse, fine, finechart, maxlen, threshold):
 	""" compute posterior probabilities and prune away cells below some
-	threshold. """
+	threshold. this version produces a matrix with pruned spans having NaN as
+	value. """
 	lensent = goal.right
 	sentprob = inside[goal.label, 0, lensent]
 	print "sentprob=%g" % sentprob,
@@ -105,7 +106,8 @@ def whitelistfromkbest(chart, goal, coarse, fine, k, whitelist, maxlen):
 	for Ih in kbest:
 		l[itemcast(Ih).label, itemcast(Ih).left,
 			itemcast(Ih).right] = np.inf #kbest[Ih]
-	print (l == np.inf).sum(), "of", len(chart), "coarse items left"
+	print (l == np.inf).sum(), #"of", len(chart), 
+	print "coarse items left"
 	for a, label in fine.toid.iteritems():
 		whitelist[label] = l[coarse.toid[removeids.sub("", a)]]
 	#logging.debug('pruning with %d nonterminals, %d items' % (
@@ -134,12 +136,12 @@ def getitems(ej, rootprob, D, chart, outside):
 	edge """
 	e = ej.edge
 	eleft = new_ChartItem(e.rule.rhs1, ej.head.left, e.split)
-	if eleft in chart:
+	if chart[ej.head.left][e.split].get(e.rule.rhs1, False):
 		if eleft in D:
 			entry = D[eleft][ej.left]
 			eejj = entry.key; prob = entry.value
 		elif ej.left == 0:
-			eejj = RankedEdge(eleft, min(chart[eleft]), 0, 0)
+			eejj = RankedEdge(eleft, chart[ej.head.left][e.split][e.rule.rhs1][0], 0, 0)
 			prob = eejj.edge.inside
 		else: raise ValueError
 		if eleft not in outside:
@@ -151,7 +153,7 @@ def getitems(ej, rootprob, D, chart, outside):
 			entry = D[eright][ej.right]
 			eejj = entry.key; prob = entry.value
 		elif ej.right == 0:
-			eejj = RankedEdge(eright, min(chart[eright]), 0, 0)
+			eejj = RankedEdge(eright, chart[e.split][ej.head.right][e.rule.rhs2][0], 0, 0)
 			prob = eejj.edge.inside
 		else: raise ValueError
 		if eright not in outside:

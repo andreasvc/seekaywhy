@@ -3,8 +3,7 @@ cimport numpy as np
 from kbest cimport lazykthbest, lazykbest
 from agenda cimport Entry, Agenda
 from containers cimport ChartItem, Edge, RankedEdge, Grammar, \
-			dictcast, getlabel, getvec, itemcast, edgecast
-from cky cimport new_ChartItem
+			dictcast, getlabel, getvec, itemcast, edgecast, new_ChartItem
 
 @cython.locals(
 	kbest=dict,

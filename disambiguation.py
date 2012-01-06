@@ -6,7 +6,7 @@ from bisect import bisect_right
 from collections import defaultdict
 from operator import itemgetter
 from nltk import Tree
-from kbest1 import * #lazykbest
+from kbest import * #lazykbest
 try:
 	import cython
 	assert cython.compiled

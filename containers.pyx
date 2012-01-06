@@ -87,6 +87,11 @@ cdef inline RankedEdge new_RankedEdge(ChartItem head, Edge edge, short j1, short
 	rankededge.left = j1; rankededge.right = j2
 	return rankededge
 
+cdef inline ChartItem new_ChartItem(unsigned int label, short left, short right):
+	cdef ChartItem item = ChartItem.__new__(ChartItem)
+	item.label = label; item.left = left; item.right = right
+	return item
+
 cdef class Grammar:
 	def __init__(self, lexical, unary, binary, tolabel, toid, lexicon):
 		self.lexical = lexical; self.unary = unary; self.binary = binary
