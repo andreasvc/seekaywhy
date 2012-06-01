@@ -72,7 +72,7 @@ cdef class Agenda(dict):
 		entry = <Entry>self.mapping[key]
 		return entry.value
 
-	cpdef inline setitem(self, key, value):
+	cpdef setitem(self, key, value):
 		cdef Entry oldentry, entry
 		if key in self.mapping:
 			oldentry = <Entry>self.mapping[key]
@@ -89,7 +89,7 @@ cdef class Agenda(dict):
 			self.mapping[key] = entry
 			heappush(self.heap, entry, self.cmpfun)
 
-	cpdef inline setifbetter(self, key, value):
+	cpdef setifbetter(self, key, value):
 		""" sets an item, but only if item is new or has lower score """
 		cdef Entry oldentry, entry
 		if key in self.mapping:
@@ -225,12 +225,12 @@ cdef class EdgeAgenda(Agenda):
 			assert temp == {}
 			heapify(self.heap, self.cmpfun)
 
-	cpdef inline Edge getitem(self, key):
+	cpdef Edge getitem(self, key):
 		cdef Entry entry
 		entry = <Entry>self.mapping[key]
 		return <Edge>entry.value
 
-	cpdef inline setifbetter(self, key, value):
+	cpdef setifbetter(self, key, value):
 		""" sets an item, but only if item is new or has lower score """
 		cdef Entry oldentry, entry
 		if key in self.mapping:

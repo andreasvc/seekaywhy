@@ -485,14 +485,21 @@ cdef outsidescores(np.ndarray[np.double_t, ndim=3] inside,
 	return outside
 
 def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
-	""" Given an NLTK tree, compute the DOP parse probability given a
-	DOP reduction. """
-	#from bigfloat import BigFloat, setcontext, quadruple_precision
-	#setcontext(quadruple_precision)
-	#chart = defaultdict(lambda: BigFloat(0))
-	#chart = defaultdict(float)
+	""" Given an NLTK tree, compute the exact DOP parse probability given
+	a DOP reduction.
+
+	This follows up on a suggestion made by Goodman (2003, p. 20)
+	of calculating DOP probabilities of given parse trees, although I'm not
+	sure it has complexity O(nP) as he suggests (with n as number of nodes in input,
+	and P as max number of rules consistent with a node in the input).
+	Furthermore, the idea of sampling trees "long enough" until we have the MPP
+	is no faster than sampling without applying this procedure, because there
+	is no way to determine that some probability p is the maximal probability,
+	except in the unlikely case that p > 0.5. Hence, this method is mostly
+	useful in a reranking framework where it is known in advance that a small
+	set of trees is of interest."""
 	neginf = float('-inf')
-	cdef dict chart = <dict>defaultdict(lambda: neginf)
+	cdef dict chart = <dict>defaultdict(lambda: neginf) # fixme: avoid lambda; use chart.get(x, neginf)
 	cdef Rule rule
 	cdef Terminal terminal
 	
@@ -615,7 +622,7 @@ def reestimate(Grammar coarse, Grammar fine):
 	nonterminals.  """
 	cdef dict lhs = <dict>defaultdict(list)
 	cdef dict rhs = <dict>defaultdict(list)
-	cdef dict mapping = dict((b, coarse.toid[a.split("@")[0]])
+	cdef dict mapping = dict((b, coarse.toid[a.rsplit("@", 1)[0]])
 							for a,b in fine.toid.iteritems())
 	for rule in fine.unary:
 		lhs[mapping[rule.lhs]].append(rule.prob)
@@ -653,13 +660,13 @@ def getgrammarmapping(coarse, fine):
 			mapping[coarse.tolabel[rule.lhs],
 				coarse.tolabel[rule.rhs1], coarse.tolabel[rule.rhs2]] = []
 	for rule in fine.unary:
-		mapping[fine.tolabel[rule.lhs].split("@")[0],
-			fine.tolabel[rule.rhs1].split("@")[0]].append(rule)
+		mapping[fine.tolabel[rule.lhs].rsplit("@", 1)[0],
+			fine.tolabel[rule.rhs1].rsplit("@", 1)[0]].append(rule)
 	for rules in fine.binary:
 		for rule in rules:
-			mapping[fine.tolabel[rule.lhs].split("@")[0],
-				fine.tolabel[rule.rhs1].split("@")[0],
-				fine.tolabel[rule.rhs2].split("@")[0]].append(rule)
+			mapping[fine.tolabel[rule.lhs].rsplit("@", 1)[0],
+				fine.tolabel[rule.rhs1].rsplit("@", 1)[0],
+				fine.tolabel[rule.rhs2].rsplit("@", 1)[0]].append(rule)
 	return mapping
 
 def cachingdopparseprob(tree, Grammar grammar, dict mapping, dict cache):

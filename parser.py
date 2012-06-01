@@ -58,7 +58,7 @@ def mainctf(unknownwords):
 	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords, logprob=False)
 	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, freqs=False)
 	for a in fine.toid:
-		assert a.split("@")[0] in coarse.toid, "%s not in coarse grammar" % a
+		assert a.rsplit("@", 1)[0] in coarse.toid, "%s not in coarse grammar" % a
 	if len(sys.argv) >= 6: input = open(sys.argv[5])
 	else: input = sys.stdin
 	if len(sys.argv) == 7: out = open(sys.argv[6], "w")
@@ -143,7 +143,7 @@ def mainrerank(unknownwords):
 	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords, logprob=True)
 	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, freqs=False, logprob=True)
 	for a in fine.toid:
-		assert a.split("@")[0] in coarse.toid, "%s not in coarse grammar" % a
+		assert a.rsplit("@", 1)[0] in coarse.toid, "%s not in coarse grammar" % a
 	if len(sys.argv) >= 6: input = open(sys.argv[5])
 	else: input = sys.stdin
 	if len(sys.argv) == 7: out = open(sys.argv[6], "w")
@@ -194,6 +194,7 @@ def nonterminalmapping(coarse, fine):
 	return mapping
 
 def main():
+	print "SeeKayWhy PCFG parser - Andreas van Cranenburgh"
 	if "-u" in sys.argv:
 		i = sys.argv.index("-u")
 		unknownwords = sys.argv[i+1]
