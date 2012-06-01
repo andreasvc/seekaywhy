@@ -168,7 +168,7 @@ def mainrerank(unknownwords):
 				sys.stdout.flush()
 			prob, tree = max(trees)
 			prob = exp(prob)
-			print "\nprob=%.16g\n%s\n" % (prob, tree)
+			print "\nprob=%g\n%s\n" % (prob, tree)
 			out.write("prob=%.16g\n%s\n" % (prob, tree))
 		else:
 			unparsed += 1
