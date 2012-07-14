@@ -13,11 +13,12 @@ def parse(list sent, Grammar grammar, whitelist):
 	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
 	cdef long numsymbols = len(grammar.toid), lhs
 	cdef double oldscore, prob
-	cdef bint foundbetter = False 
+	cdef bint foundbetter = False, foundnew = False
 	cdef Rule rule
 	cdef Terminal terminal
 	cdef list chart = [[{} for _ in range(lensent+1)] for _ in range(lensent)]
 	cdef unicode word
+	cdef set unaryrules = set(grammar.unary), candidates
 	# the viterbi chart is initially filled with infinite log probabilities,
 	# cells which are to be blocked contain NaN.
 	cdef np.ndarray[np.double_t, ndim=3] viterbi
@@ -59,33 +60,43 @@ def parse(list sent, Grammar grammar, whitelist):
 					minsplitright[terminal.lhs, left] = right
 				if right > maxsplitright[terminal.lhs, left]:
 					maxsplitright[terminal.lhs, left] = right
-		# unary rules on POS tags 
-		for rule in <list>grammar.unary:
-			if (not isnan(viterbi[rule.lhs, left, right])
-				and isfinite(viterbi[rule.rhs1, left, right])):
-				prob = rule.prob + viterbi[rule.rhs1, left, right]
-				if isfinite(viterbi[rule.lhs, left, right]):
-					chart[left][right][rule.lhs].append(
-						new_Edge(prob, rule, right))
-				else:
-					chart[left][right][rule.lhs] = [
-						new_Edge(prob, rule, right)]
-				if (prob < viterbi[rule.lhs, left, right]):
-					viterbi[rule.lhs, left, right] = prob
-					# update filter
-					if left > minsplitleft[rule.lhs, right]:
-						minsplitleft[rule.lhs, right] = left
-					if left < maxsplitleft[rule.lhs, right]:
-						maxsplitleft[rule.lhs, right] = left
-					if right < minsplitright[rule.lhs, left]:
-						minsplitright[rule.lhs, left] = right
-					if right > maxsplitright[rule.lhs, left]:
-						maxsplitright[rule.lhs, left] = right
-	
+
+		# unary rules on the span of this POS tag
+		# only use each rules once (no cycles)
+		# keep going until no new items can be derived.
+		foundnew = True
+		candidates = unaryrules.copy()
+		while foundnew:
+			foundnew = False
+			for rule in candidates:
+				if (not isnan(viterbi[rule.lhs, left, right])
+					and isfinite(viterbi[rule.rhs1, left, right])):
+					prob = rule.prob + viterbi[rule.rhs1, left, right]
+					if isfinite(viterbi[rule.lhs, left, right]):
+						chart[left][right][rule.lhs].append(
+							new_Edge(prob, rule, right))
+					else:
+						chart[left][right][rule.lhs] = [
+							new_Edge(prob, rule, right)]
+					if (prob < viterbi[rule.lhs, left, right]):
+						viterbi[rule.lhs, left, right] = prob
+						# update filter
+						if left > minsplitleft[rule.lhs, right]:
+							minsplitleft[rule.lhs, right] = left
+						if left < maxsplitleft[rule.lhs, right]:
+							maxsplitleft[rule.lhs, right] = left
+						if right < minsplitright[rule.lhs, left]:
+							minsplitright[rule.lhs, left] = right
+						if right > maxsplitright[rule.lhs, left]:
+							maxsplitright[rule.lhs, left] = right
+					candidates.discard(rule)
+					foundnew = True
+					break
+
 	for span in range(2, lensent + 1):
 		print span,
 		sys.stdout.flush()
-	
+
 		# loop over all non-pruned indices. this appears to be slow.
 		#labels, leftidx, rightidx = np.isinf(viterbi[:,:lensent,:lensent+1]).nonzero()
 		#indices = (rightidx - leftidx).argsort()
@@ -144,28 +155,37 @@ def parse(list sent, Grammar grammar, whitelist):
 						if right > maxsplitright[lhs, left]:
 							maxsplitright[lhs, left] = right
 
-			# unary rules
-			for rule in <list>grammar.unary:
-				if (not isnan(viterbi[rule.lhs, left, right])
-					and isfinite(viterbi[rule.rhs1, left, right])):
-					prob = rule.prob + viterbi[rule.rhs1, left, right]
-					if isfinite(viterbi[rule.lhs, left, right]):
-						chart[left][right][rule.lhs].append(
-							new_Edge(prob, rule, right))
-					else:
-						chart[left][right][rule.lhs] = [
-							new_Edge(prob, rule, right)]
-					if prob < viterbi[rule.lhs, left, right]:
-						viterbi[rule.lhs, left, right] = prob
-						# update filter
-						if left > minsplitleft[rule.lhs, right]:
-							minsplitleft[rule.lhs, right] = left
-						if left < maxsplitleft[rule.lhs, right]:
-							maxsplitleft[rule.lhs, right] = left
-						if right < minsplitright[rule.lhs, left]:
-							minsplitright[rule.lhs, left] = right
-						if right > maxsplitright[rule.lhs, left]:
-							maxsplitright[rule.lhs, left] = right
+			# unary rules on this span
+			# only use each rules once (no cycles)
+			# keep going until no new items can be derived.
+			foundnew = True
+			candidates = set(unaryrules)
+			while foundnew:
+				foundnew = False
+				for rule in candidates:
+					if (not isnan(viterbi[rule.lhs, left, right])
+						and isfinite(viterbi[rule.rhs1, left, right])):
+						prob = rule.prob + viterbi[rule.rhs1, left, right]
+						if isfinite(viterbi[rule.lhs, left, right]):
+							chart[left][right][rule.lhs].append(
+								new_Edge(prob, rule, right))
+						else:
+							chart[left][right][rule.lhs] = [
+								new_Edge(prob, rule, right)]
+						if prob < viterbi[rule.lhs, left, right]:
+							viterbi[rule.lhs, left, right] = prob
+							# update filter
+							if left > minsplitleft[rule.lhs, right]:
+								minsplitleft[rule.lhs, right] = left
+							if left < maxsplitleft[rule.lhs, right]:
+								maxsplitleft[rule.lhs, right] = left
+							if right < minsplitright[rule.lhs, left]:
+								minsplitright[rule.lhs, left] = right
+							if right > maxsplitright[rule.lhs, left]:
+								maxsplitright[rule.lhs, left] = right
+						candidates.discard(rule)
+						foundnew = True
+						break
 	print
 	return chart, viterbi
 
@@ -176,7 +196,7 @@ def parse_nomatrix(list sent, Grammar grammar, chart):
 	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
 	cdef long numsymbols = len(grammar.toid), lhs
 	cdef double oldscore, prob, infinity = float('infinity')
-	cdef bint foundbetter = False 
+	cdef bint foundbetter = False
 	cdef Rule rule
 	cdef Terminal terminal
 	cdef unicode word
@@ -234,11 +254,11 @@ def parse_nomatrix(list sent, Grammar grammar, chart):
 						maxsplitright[rule.lhs, left] = right
 				else:
 					cell[rule.lhs].append(new_Edge(prob, rule, right))
-	
+
 	for span in range(2, lensent + 1):
 		print span,
 		sys.stdout.flush()
-	
+
 		# constituents from left to right
 		for left in range(0, lensent - span + 1):
 			right = left + span
@@ -497,44 +517,51 @@ def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
 	is no way to determine that some probability p is the maximal probability,
 	except in the unlikely case that p > 0.5. Hence, this method is mostly
 	useful in a reranking framework where it is known in advance that a small
-	set of trees is of interest."""
+	set of trees is of interest.
+
+	expects a mapping which gives a list of consistent rules from the reduction
+	(as Rule objects) given a rule as key (as a tuple of strings); e.g. ('NP',
+	'DT', 'NN') -> [Rule(...), Rule(...), ...]"""
 	neginf = float('-inf')
-	cdef dict chart = <dict>defaultdict(lambda: neginf) # fixme: avoid lambda; use chart.get(x, neginf)
+	cdef dict chart = {}	#chart[left, right][label]
+	cdef tuple a, b, c
 	cdef Rule rule
-	cdef Terminal terminal
-	
+
 	# add all possible POS tags
 	chart.update(lexchart)
 	for n, word in enumerate(tree.leaves()):
 		# replace leaves with indices so as to easily find spans
 		tree[tree.leaf_treeposition(n)] = n
 
+	# do post-order traversal (bottom-up)
 	for node in list(tree.subtrees())[::-1]:
 		if not isinstance(node[0], Tree): continue
 		prod = (node.node,) + tuple(a.node for a in node)
 		left = min(node.leaves())
 		right = max(node.leaves()) + 1
-		if len(node) == 2:
+		if len(node) == 1: #unary node
+			for rule in mapping[prod]:
+				b = (rule.rhs1, left, right)
+				if b in chart:
+					a = (rule.lhs, left, right)
+					if a in chart:
+						chart[a] = logprobadd(chart[a], -rule.prob + chart[b])
+					else:
+						chart[a] = (-rule.prob + chart[b])
+		elif len(node) == 2: #binary node
 			split = min(node[1].leaves())
 			for rule in mapping[prod]:
-				chart[rule.lhs, left, right] = logadd(
-					chart[rule.lhs, left, right],
-					(-rule.prob
-					+ chart[rule.rhs1, left, split]
-					+ chart[rule.rhs2, split, right]))
-				#chart[rule.lhs, left, right] += (rule.prob
-				#	* chart[rule.rhs1, left, split]
-				#	* chart[rule.rhs2, split, right])
-		elif len(node) == 1:
-			for rule in mapping[prod]:
-				chart[rule.lhs, left, right] = logadd(
-					chart[rule.lhs, left, right],
-					-rule.prob + chart[rule.rhs1, left, right])
-				#chart[rule.lhs, left, right] += (rule.prob
-				#		* chart[rule.rhs1, left, right])
+				b = (rule.rhs1, left, split)
+				c = (rule.rhs2, split, right)
+				if b in chart and c in chart:
+					a = (rule.lhs, left, right)
+					if a in chart:
+						chart[a] = logprobadd(chart[a],
+							(-rule.prob + chart[b] + chart[c]))
+					else:
+						chart[a] = -rule.prob + chart[b] + chart[c]
 		else: raise ValueError("expected binary tree.")
-		#print prod[0], left, right, chart[grammar.toid[prod[0]], left, right]
-	return chart[grammar.toid[tree.node], 0, len(tree.leaves())]
+	return chart.get((grammar.toid[tree.node], 0, len(tree.leaves())), neginf)
 
 
 # to avoid overhead of __init__ and __cinit__ constructors
@@ -684,7 +711,7 @@ def cachingdopparseprob(tree, Grammar grammar, dict mapping, dict cache):
 	for n, word in enumerate(tree.leaves()):
 		for terminal in grammar.lexical:
 			if terminal.word == word:
-				chart[terminal.lhs, n, n+1] = logadd(
+				chart[terminal.lhs, n, n+1] = logprobadd(
 					chart[terminal.lhs, n, n+1], -terminal.prob)
 				#chart[terminal.lhs, n, n+1] += terminal.prob
 		# replace leaves with indices so as to easily find spans
@@ -702,7 +729,7 @@ def cachingdopparseprob(tree, Grammar grammar, dict mapping, dict cache):
 		if len(node) == 2:
 			split = min(node[1].leaves())
 			for rule in mapping[prod]:
-				chart[rule.lhs, left, right] = logadd(
+				chart[rule.lhs, left, right] = logprobadd(
 					chart[rule.lhs, left, right],
 					(-rule.prob
 					+ chart[rule.rhs1, left, split]
@@ -712,7 +739,7 @@ def cachingdopparseprob(tree, Grammar grammar, dict mapping, dict cache):
 				#	* chart[rule.rhs2, split, right])
 		elif len(node) == 1:
 			for rule in mapping[prod]:
-				chart[rule.lhs, left, right] = logadd(
+				chart[rule.lhs, left, right] = logprobadd(
 					chart[rule.lhs, left, right],
 					-rule.prob + chart[rule.rhs1, left, right])
 				#chart[rule.lhs, left, right] += (rule.prob
@@ -730,18 +757,19 @@ def doplexprobs(tree, Grammar grammar):
 	for n, word in enumerate(tree.leaves()):
 		for terminal in grammar.lexical:
 			if terminal.word == word:
-				chart[terminal.lhs, n, n+1] = logadd(
+				chart[terminal.lhs, n, n+1] = logprobadd(
 					chart[terminal.lhs, n, n+1], -terminal.prob)
-				#chart[terminal.lhs, n, n+1] += terminal.prob
 	return chart
 
 cdef double log1e200 = log(1e200)
-cdef inline logadd(double x, double y):
+cdef inline logprobadd(double x, double y):
+	""" add two log probabilities in log space.
+	i.e., logprobadd(log(a), log(b)) == log(a + b) """
 	if isinf(x): return y
-	if isinf(y): return x
+	elif isinf(y): return x
 	# If one value is much smaller than the other, keep the larger value.
-	if x < (y - log1e200): return y
-	if y < (x - log1e200): return x
+	elif x < (y - log1e200): return y
+	elif y < (x - log1e200): return x
 	diff = y - x
 	assert not isinf(diff)
 	if isinf(exp(diff)):	# difference is too large

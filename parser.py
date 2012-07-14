@@ -4,10 +4,13 @@ from math import exp, log, isinf
 from heapq import nlargest
 import numpy as np
 from nltk import Tree
-from cky import parse, parse_nomatrix, readbitpargrammar, doinsideoutside, pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, cachingdopparseprob, doplexprobs
+from cky import parse, parse_nomatrix, readbitpargrammar, doinsideoutside, \
+	pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, \
+	cachingdopparseprob, doplexprobs
 from kbest import lazykbest
 from containers import ChartItem
-from coarsetofine import whitelistfromkbest, whitelistfromposteriors, whitelistfromposteriors2
+from coarsetofine import whitelistfromkbest, whitelistfromposteriors, \
+	whitelistfromposteriors2
 from disambiguation import marginalize
 removeids = re.compile("@[0-9_]+")
 
@@ -23,7 +26,8 @@ def mainsimple(unknownwords):
 		if not a.strip(): continue
 		sent = a.splitlines()
 		for word in sent:
-			assert word in grammar.lexicon or unknownwords, "unknown word \"%s\" and no open class tags supplied" % word
+			assert word in grammar.lexicon or unknownwords, (
+				"unknown word %r and no open class tags supplied" % word)
 		print "parsing:", n, " ".join(sent),
 		sys.stdout.flush()
 		chart, viterbi = parse(sent, grammar, None)
@@ -161,10 +165,11 @@ def mainrerank(unknownwords):
 		chart, _ = parse(sent, coarse, None); print
 		if chart[0][len(sent)].get(coarse.toid["TOP"], False):
 			trees = []
-			for m, (tree, prob) in enumerate(lazykbest(chart, start, k, coarse.tolabel, sent)):
-				if m == 0: lexchart = doplexprobs(Tree(tree), fine)
+			candidates = lazykbest(chart, start, k, coarse.tolabel, sent)
+			lexchart = doplexprobs(Tree(candidates[0][0]), fine)
+			for m, (tree, prob) in enumerate(candidates):
 				trees.append((dopparseprob(Tree(tree), fine, mapping, lexchart), tree))
-				print m, exp(-prob), trees[-1][0] #, exp(trees[-1][0])
+				print m, exp(-prob), exp(trees[-1][0])
 				sys.stdout.flush()
 			prob, tree = max(trees)
 			prob = exp(prob)
