@@ -31,9 +31,10 @@ Options:
 --rerank k      enable DOP reranking mode: find DOP parse probabilities
                 for k coarse derivations.
 """ % (sys.argv[0], sys.argv[0])
-#TODO: --quiet         produce no output except parses
+#TODO:
+#--quiet         produce no output except parses
 #--kbestctf k    use k-best coarse-to-fine; instead of posterior threshold,
-#				use k-best derivations as threshold
+#                use k-best derivations as threshold
 
 def main():
 	print "SeeKayWhy PCFG parser - Andreas van Cranenburgh"
@@ -42,18 +43,19 @@ def main():
 	opts = dict(opts)
 	unknownwords = opts.get("-u")
 	k = opts.get("-b", 1)
+	prob = "--prob" in opts
 	if 2 <= len(args) <= 4:
-		simple(args, unknownwords, k)
+		simple(args, unknownwords, k, prob)
 	elif 4 <= len(args) <= 6 and "--rerank" in opts:
-			rerank(args, unknownwords, k, int(opts['--rerank']))
+			rerank(args, unknownwords, k, prob, int(opts['--rerank']))
 	elif 4 <= len(args) <= 6:
 		if "--kbestctf" in opts:
 			threshold = int(opts.get("--kbestctf"))
 		else: threshold = float(opts.get("--threshold", -6.2)) #0.01
-		ctf(args, unknownwords, k, threshold, posterior=not opts.get("--kbestctf"))
+		ctf(args, unknownwords, k, prob, threshold, posterior=not opts.get("--kbestctf"))
 	else: print usage
 
-def simple(args, unknownwords, k):
+def simple(args, unknownwords, k, printprob):
 	grammar = readbitpargrammar(args[0], args[1], unknownwords)
 	input = sys.stdin; out = sys.stdout
 	if len(args) >= 3: input = open(args[2])
@@ -74,9 +76,10 @@ def simple(args, unknownwords, k):
 			parsetrees = lazykbest(chart, start, k, grammar.tolabel, sent)
 			assert len(parsetrees) == len(set(parsetrees))
 			assert len(parsetrees) == len(set(tree for tree, prob in parsetrees))
-			#out.writelines("vitprob=%.16g\n%s\n" % (exp(-prob), tree)
-			out.writelines("%s\n" % tree
-				for tree, prob in parsetrees)
+			if printprob:
+				out.writelines("vitprob=%.16g\n%s\n" % (exp(-prob), tree)
+					for tree, prob in parsetrees)
+			else: out.writelines("%s\n" % tree for tree, _ in parsetrees)
 		else:
 			out.write("(NP %s)\n" % "".join("(%s %s)" % (a,a) for a in sent))
 			#out.write("No parse for \"%s\"\n" % " ".join(sent))
@@ -90,7 +93,7 @@ def simple(args, unknownwords, k):
 	print "finished"
 	out.close()
 
-def ctf(args, unknownwords, k, threshold, posterior=True, mpd=False):
+def ctf(args, unknownwords, k, printprob, threshold, posterior=True, mpd=False):
 	m = 10000
 	derivthreshold = 1000	# kbest derivations to prune with
 	if posterior: threshold = exp(threshold)
@@ -154,10 +157,14 @@ def ctf(args, unknownwords, k, threshold, posterior=True, mpd=False):
 				pprint_chart(chart, sent, fine.tolabel)
 				raise
 			parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m, mpd=mpd)
-			label = "derivprob" if mpd else "parseprob"
+			results = nlargest(k, parsetrees, key=parsetrees.get)
 			# print k-best parsetrees
-			out.writelines("%s=%.16g\n%s\n" % (label, parsetrees[tree], tree)
-				for tree in nlargest(k, parsetrees, key=parsetrees.get))
+			if printprob:
+				label = "derivprob" if mpd else "parseprob"
+				out.writelines("%s=%.16g\n%s\n" % (label, parsetrees[tree], tree)
+					for tree in results)
+			else:
+				out.writelines("%s\n" % tree for tree in results)
 		else:
 			unparsed += 1
 			print "No parse"
@@ -173,7 +180,7 @@ def ctf(args, unknownwords, k, threshold, posterior=True, mpd=False):
 	print "finished"
 	out.close()
 
-def rerank(args, unknownwords, printk, k):
+def rerank(args, unknownwords, printk, printprob, k):
 	maxlen = 999 #??
 	unparsed = 0
 	coarse = readbitpargrammar(args[0], args[1], unknownwords, logprob=True)
@@ -206,9 +213,13 @@ def rerank(args, unknownwords, printk, k):
 						fine, mapping, lexchart), tree))
 				print m, exp(-prob), exp(trees[-1][0])
 				sys.stdout.flush()
+			results = nlargest(printk, trees)
 			# print k-best parsetrees
-			out.writelines("parseprob=%.16g\n%s\n" % (exp(prob), tree)
-				for prob, tree in nlargest(printk, trees))
+			if printprob:
+				out.writelines("parseprob=%.16g\n%s\n" % (exp(prob), tree)
+						for prob, tree in results)
+			else:
+				out.writelines("%s\n" % tree for _, tree in results)
 		else:
 			unparsed += 1
 			print "No parse"
