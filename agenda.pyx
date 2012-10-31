@@ -26,8 +26,8 @@ cdef class Function:
 cdef class EdgeCmp(Function):
 	# this is _significantly_ faster than relying on __richcmp__
 	cdef bint cmpfun(self, Entry a, Entry b):
-		return (a.value.score < b.value.score
-				or (a.value.score == b.value.score and a.count < b.count))
+		return (a.value.inside < b.value.inside
+				or (a.value.inside == b.value.inside and a.count < b.count))
 cdef class NormalCmp(Function):
 	cdef bint cmpfun(self, Entry a, Entry b):
 		return (a.value < b.value
@@ -235,7 +235,7 @@ cdef class EdgeAgenda(Agenda):
 		cdef Entry oldentry, entry
 		if key in self.mapping:
 			oldentry = <Entry>self.mapping[key]
-			if (<Edge>value).score >= (<Edge>oldentry.value).score:
+			if (<Edge>value).inside >= (<Edge>oldentry.value).inside:
 				return
 		self.setitem(key, <Edge>value)
 

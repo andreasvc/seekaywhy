@@ -93,11 +93,17 @@ cdef inline ChartItem new_ChartItem(unsigned int label, short left, short right)
 	return item
 
 cdef class Grammar:
-	def __init__(self, lexical, unary, binary, tolabel, toid, lexicon):
+	def __init__(self, lexical, unary, unarybyrhs, binary, tolabel, toid,
+			lexicon, logprob):
 		self.lexical = lexical; self.unary = unary; self.binary = binary
 		self.tolabel = tolabel; self.toid = toid; self.lexicon = lexicon
+		self.unarybyrhs = unarybyrhs; self.logprob = logprob
 	def __repr__(self):
-		return "Grammar with %d nonterminals, %d unary productions, %d binary productions, %d lexical productions, and % words in lexicon." % (len(self.toid), len(self.unary), sum(map(len, self.binary)), len(self.lexical), len(self.lexicon))
+		return ("Grammar with %d nonterminals, %d unary productions, "
+			"%d binary productions, %d lexical productions, and "
+			"% words in lexicon. Logprobs: %r" % (len(self.toid), len(self.unary),
+			sum(map(len, self.binary)), len(self.lexical), len(self.lexicon),
+			self.logprob))
 
 cdef class Rule:
 	def __init__(self, lhs, rhs1, rhs2, prob):
@@ -114,17 +120,3 @@ cdef class Terminal(Rule):
 	def __repr__(self):
 		return "Terminal(%r, %r, %r, %r)" % (
 			self.lhs, self.rhs1, self.rhs2, self.prob)
-
-# some helper functions that only serve to bridge cython & python code
-cpdef inline unsigned int getlabel(ChartItem a):
-	return a.label
-cpdef inline unsigned long long getvec(ChartItem a):
-	return a.vec
-cpdef inline double getscore(Edge a):
-	return a.score
-cpdef inline dict dictcast(d):
-	return <dict>d
-cpdef inline ChartItem itemcast(i):
-	return <ChartItem>i
-cpdef inline Edge edgecast(e):
-	return <Edge>e

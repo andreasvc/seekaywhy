@@ -3,102 +3,98 @@ import sys, codecs
 from collections import defaultdict
 from nltk import Tree
 import numpy as np
-from agenda cimport Agenda
+
+from agenda cimport EdgeAgenda, Entry
+cimport numpy as np
+from containers cimport Edge, Rule, Terminal, Grammar
+
+cdef extern from "math.h":
+	bint isinf(double)
+	bint isnan(double)
+	bint isfinite(double)
+	double log(double)
+	double exp(double)
+
 encoding = "utf-8"
 
 def parse(list sent, Grammar grammar, whitelist):
 	""" A CKY parser modeled after Bodenstab's `fast grammar loop.'
 		and the Stanford parser. """
 	cdef short left, right, mid, span, lensent = len(sent)
-	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
-	cdef long numsymbols = len(grammar.toid), lhs
-	cdef double oldscore, prob
-	cdef bint foundbetter = False, foundnew = False
+	cdef short narrowl, narrowr, minmid, maxmid
+	cdef long numsymbols = len(grammar.toid), lhs, rhs1
+	cdef double prob
+	cdef bint foundbetter, newspan
 	cdef Rule rule
 	cdef Terminal terminal
+	cdef EdgeAgenda unaryagenda = EdgeAgenda()
 	cdef list chart = [[{} for _ in range(lensent+1)] for _ in range(lensent)]
+	cdef dict cell
 	cdef unicode word
-	cdef set unaryrules = set(grammar.unary), candidates
 	# the viterbi chart is initially filled with infinite log probabilities,
-	# cells which are to be blocked contain NaN.
+	# spans which are to be blocked contain NaN.
 	cdef np.ndarray[np.double_t, ndim=3] viterbi
 	# matrices for the filter which gives minima and maxima for splits
-	cdef np.ndarray[np.int16_t, ndim=2] minsplitleft = np.array([-1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)
-		).reshape(numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] maxsplitleft = np.array([lensent+1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
-		numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] minsplitright = np.array([lensent + 1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)
-		).reshape(numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
-		numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] minleft, maxleft, minright, maxright
+	minleft = np.empty((numsymbols, lensent+1), dtype='int16'); minleft.fill(-1)
+	maxleft = np.empty_like(minleft); maxleft.fill(lensent+1)
+	minright = np.empty_like(minleft); minright.fill(lensent+1)
+	maxright = np.empty_like(minleft); maxright.fill(-1)
+	assert grammar.logprob, "Expecting grammar with log probabilities."
+
 	if whitelist is None:
-		viterbi = np.array([np.inf],
-		dtype='d').repeat(lensent * (lensent+1) * numsymbols).reshape(
-		(numsymbols, lensent, (lensent+1)))
+		viterbi = np.empty((lensent, lensent + 1, numsymbols), dtype='d')
+		viterbi.fill(np.inf)
 	else: viterbi = whitelist
 	# assign POS tags
 	print 1, # == span
 	for left in range(lensent):
 		right = left + 1
+		cell = chart[left][right]
 		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
 		for terminal in <list>grammar.lexical:
-			if (not isnan(viterbi[terminal.lhs, left, right]) and
+			if (not isnan(viterbi[left, right, terminal.lhs]) and
 				terminal.word == word):
-				viterbi[terminal.lhs, left, right] = terminal.prob
-				chart[left][right][terminal.lhs] = [
-					new_Edge(terminal.prob, terminal, right)]
+				lhs = terminal.lhs
+				viterbi[left, right, lhs] = terminal.prob
+				cell[lhs] = [new_Edge(terminal.prob, terminal, right)]
 				# update filter
-				if left > minsplitleft[terminal.lhs, right]:
-					minsplitleft[terminal.lhs, right] = left
-				if left < maxsplitleft[terminal.lhs, right]:
-					maxsplitleft[terminal.lhs, right] = left
-				if right < minsplitright[terminal.lhs, left]:
-					minsplitright[terminal.lhs, left] = right
-				if right > maxsplitright[terminal.lhs, left]:
-					maxsplitright[terminal.lhs, left] = right
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
 
 		# unary rules on the span of this POS tag
-		# only use each rules once (no cycles)
-		# keep going until no new items can be derived.
-		foundnew = True
-		candidates = unaryrules.copy()
-		while foundnew:
-			foundnew = False
-			for rule in candidates:
-				if (not isnan(viterbi[rule.lhs, left, right])
-					and isfinite(viterbi[rule.rhs1, left, right])):
-					prob = rule.prob + viterbi[rule.rhs1, left, right]
-					if isfinite(viterbi[rule.lhs, left, right]):
-						chart[left][right][rule.lhs].append(
-							new_Edge(prob, rule, right))
-					else:
-						chart[left][right][rule.lhs] = [
-							new_Edge(prob, rule, right)]
-					if (prob < viterbi[rule.lhs, left, right]):
-						viterbi[rule.lhs, left, right] = prob
-						# update filter
-						if left > minsplitleft[rule.lhs, right]:
-							minsplitleft[rule.lhs, right] = left
-						if left < maxsplitleft[rule.lhs, right]:
-							maxsplitleft[rule.lhs, right] = left
-						if right < minsplitright[rule.lhs, left]:
-							minsplitright[rule.lhs, left] = right
-						if right > maxsplitright[rule.lhs, left]:
-							maxsplitright[rule.lhs, left] = right
-					candidates.discard(rule)
-					foundnew = True
-					break
+		# NB: for this agenda, only the probabilities of the edges matter
+		unaryagenda.update([(
+			rhs1, new_Edge(viterbi[left, right, rhs1], None, 0))
+			for rhs1 in range(numsymbols)
+			if isfinite(viterbi[left, right, rhs1])])
+		while unaryagenda.length:
+			rhs1 = unaryagenda.popentry().key
+			for rule in <list>grammar.unarybyrhs[rhs1]:
+				if isnan(viterbi[left, right, rule.lhs]): continue
+				lhs = rule.lhs
+				prob = rule.prob + viterbi[left, right, rhs1]
+				if not isfinite(viterbi[left, right, lhs]): cell[lhs] = []
+				edge = new_Edge(prob, rule, right)
+				cell[lhs].append(edge)
+				if prob >= viterbi[left, right, lhs]: continue
+				unaryagenda.setitem(lhs, edge)
+				viterbi[left, right, lhs] = prob
+				# update filter
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
 
 	for span in range(2, lensent + 1):
 		print span,
 		sys.stdout.flush()
 
 		# loop over all non-pruned indices. this appears to be slow.
-		#labels, leftidx, rightidx = np.isinf(viterbi[:,:lensent,:lensent+1]).nonzero()
+		#labels, leftidx, rightidx = np.isinf(
+		#		viterbi[:lensent,:lensent+1,:]).nonzero()
 		#indices = (rightidx - leftidx).argsort()
 		#prevspan = 0
 		#for idx in indices:
@@ -115,105 +111,89 @@ def parse(list sent, Grammar grammar, whitelist):
 		# constituents from left to right
 		for left in range(0, lensent - span + 1):
 			right = left + span
+			cell = chart[left][right]
 			# binary rules 
 			for lhs, rules in enumerate(<list>grammar.binary):
-				if isnan(viterbi[lhs, left, right]): continue
+				if isnan(viterbi[left, right, lhs]): continue
 				for rule in <list>rules:
-					#if not (np.isfinite(viterbi[rule.rhs1,left,left+1:right]).any() and np.isfinite(viterbi[rule.rhs2,left:right-1,right]).any()): continue
-					narrowr = minsplitright[rule.rhs1, left]
-					if narrowr >= right: continue
-					narrowl = minsplitleft[rule.rhs2, right]
-					if narrowl < narrowr: continue
-					widel = maxsplitleft[rule.rhs2, right]
-					minmid = smax(narrowr, widel)
-					wider = maxsplitright[rule.rhs1, left]
-					maxmid = smin(wider, narrowl) + 1
-					oldscore = viterbi[lhs, left, right]
+					#if not (np.isfinite(viterbi[left, left+1:right, rule.rhs1]
+					#	).any() and np.isfinite(viterbi[
+					#	left:right-1, right, rule.rhs2]).any()):
+					#	continue
+					narrowr = minright[rule.rhs1, left]
+					narrowl = minleft[rule.rhs2, right]
+					if narrowr >= right or narrowl < narrowr: continue
+					minmid = smax(narrowr, maxleft[rule.rhs2, right])
+					maxmid = smin(maxright[rule.rhs1, left], narrowl) + 1
+					newspan = isinf(viterbi[left, right, lhs])
 					foundbetter = False
 					for mid in range(minmid, maxmid):
-						if (isfinite(viterbi[rule.rhs1, left, mid])
-							and isfinite(viterbi[rule.rhs2, mid, right])):
-							prob = (rule.prob + viterbi[rule.rhs1, left, mid]
-									+ viterbi[rule.rhs2, mid, right])
-							if isfinite(viterbi[lhs, left, right]):
-								chart[left][right][rule.lhs].append(
-									new_Edge(prob, rule, mid))
-							else:
-								chart[left][right][rule.lhs] = [
-									new_Edge(prob, rule, mid)]
-							if prob < viterbi[lhs, left, right]:
+						if (isfinite(viterbi[left, mid, rule.rhs1])
+							and isfinite(viterbi[mid, right, rule.rhs2])):
+							prob = (rule.prob + viterbi[left, mid, rule.rhs1]
+									+ viterbi[mid, right, rule.rhs2])
+							if not isfinite(viterbi[left, right, lhs]):
+								cell[lhs] = []
+							edge = new_Edge(prob, rule, mid)
+							cell[lhs].append(edge)
+							if prob < viterbi[left, right, lhs]:
 								foundbetter = True
-								viterbi[lhs, left, right] = prob
+								viterbi[left, right, lhs] = prob
 					# update filter
-					if foundbetter and isinf(oldscore):
-						if left > minsplitleft[lhs, right]:
-							minsplitleft[lhs, right] = left
-						if left < maxsplitleft[lhs, right]:
-							maxsplitleft[lhs, right] = left
-						if right < minsplitright[lhs, left]:
-							minsplitright[lhs, left] = right
-						if right > maxsplitright[lhs, left]:
-							maxsplitright[lhs, left] = right
+					if not foundbetter or not newspan: continue
+					if left > minleft[lhs, right]: minleft[lhs, right] = left
+					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+					if right < minright[lhs, left]: minright[lhs, left] = right
+					if right > maxright[lhs, left]: maxright[lhs, left] = right
 
 			# unary rules on this span
-			# only use each rules once (no cycles)
-			# keep going until no new items can be derived.
-			foundnew = True
-			candidates = set(unaryrules)
-			while foundnew:
-				foundnew = False
-				for rule in candidates:
-					if (not isnan(viterbi[rule.lhs, left, right])
-						and isfinite(viterbi[rule.rhs1, left, right])):
-						prob = rule.prob + viterbi[rule.rhs1, left, right]
-						if isfinite(viterbi[rule.lhs, left, right]):
-							chart[left][right][rule.lhs].append(
-								new_Edge(prob, rule, right))
-						else:
-							chart[left][right][rule.lhs] = [
-								new_Edge(prob, rule, right)]
-						if prob < viterbi[rule.lhs, left, right]:
-							viterbi[rule.lhs, left, right] = prob
-							# update filter
-							if left > minsplitleft[rule.lhs, right]:
-								minsplitleft[rule.lhs, right] = left
-							if left < maxsplitleft[rule.lhs, right]:
-								maxsplitleft[rule.lhs, right] = left
-							if right < minsplitright[rule.lhs, left]:
-								minsplitright[rule.lhs, left] = right
-							if right > maxsplitright[rule.lhs, left]:
-								maxsplitright[rule.lhs, left] = right
-						candidates.discard(rule)
-						foundnew = True
-						break
+			unaryagenda.update([(rhs1, new_Edge(
+					viterbi[left, right, rhs1], None, 0))
+				for rhs1 in range(numsymbols)
+				if isfinite(viterbi[left, right, rhs1])])
+			while unaryagenda.length:
+				rhs1 = unaryagenda.popentry().key
+				for rule in <list>grammar.unarybyrhs[rhs1]:
+					if isnan(viterbi[left, right, rule.lhs]): continue
+					lhs = rule.lhs
+					prob = rule.prob + viterbi[left, right, rhs1]
+					if not isfinite(viterbi[left, right, lhs]): cell[lhs] = []
+					edge = new_Edge(prob, rule, right)
+					cell[lhs].append(edge)
+					if prob >= viterbi[left, right, lhs]: continue
+					viterbi[left, right, lhs] = prob
+					unaryagenda.setitem(lhs, edge)
+					# update filter
+					if left > minleft[lhs, right]: minleft[lhs, right] = left
+					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+					if right < minright[lhs, left]: minright[lhs, left] = right
+					if right > maxright[lhs, left]: maxright[lhs, left] = right
 	print
 	return chart, viterbi
 
-def parse_nomatrix(list sent, Grammar grammar, chart):
+def parse_sparse(list sent, Grammar grammar, chart):
 	""" A CKY parser modeled after Bodenstab's `fast grammar loop.'
-		and the Stanford parser. """
+		and the Stanford parser.
+	This version keeps the viterbi probabilities and the rest of chart
+	in a single hash table, useful for large grammars. """
 	cdef short left, right, mid, span, lensent = len(sent)
-	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
+	cdef short narrowl, narrowr, minmid, maxmid
 	cdef long numsymbols = len(grammar.toid), lhs
 	cdef double oldscore, prob, infinity = float('infinity')
-	cdef bint foundbetter = False
-	cdef Rule rule
-	cdef Terminal terminal
 	cdef unicode word
 	cdef dict cell
+	cdef bint foundbetter, newspan
+	cdef Rule rule
+	cdef Terminal terminal
+	cdef EdgeAgenda unaryagenda = EdgeAgenda()
+	cdef Entry entry
 	# matrices for the filter which gives minima and maxima for splits
-	cdef np.ndarray[np.int16_t, ndim=2] minsplitleft = np.array([-1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)
-		).reshape(numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] maxsplitleft = np.array([lensent+1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
-		numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] minsplitright = np.array([lensent + 1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)
-		).reshape(numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
-		numsymbols, lensent + 1)
+	cdef np.ndarray[np.int16_t, ndim=2] minleft, maxleft, minright, maxright
+	minleft = np.empty((numsymbols, lensent+1), dtype='int16'); minleft.fill(-1)
+	maxleft = np.empty_like(minleft); maxleft.fill(lensent+1)
+	minright = np.empty_like(minleft); minright.fill(lensent+1)
+	maxright = np.empty_like(minleft); maxright.fill(-1)
+	assert grammar.logprob, "Expecting grammar with log probabilities."
 	if chart is None:
 		chart = [[{} for _ in range(lensent)] for _ in range(lensent)]
 	# assign POS tags
@@ -224,37 +204,37 @@ def parse_nomatrix(list sent, Grammar grammar, chart):
 		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
 		for terminal in <list>grammar.lexical:
 			if terminal.lhs in cell and terminal.word == word:
-				cell[terminal.lhs] = [new_Edge(terminal.prob, terminal, right)]
+				lhs = terminal.lhs
+				cell[lhs] = [new_Edge(terminal.prob, terminal, right)]
 				# update filter
-				if left > minsplitleft[terminal.lhs, right]:
-					minsplitleft[terminal.lhs, right] = left
-				if left < maxsplitleft[terminal.lhs, right]:
-					maxsplitleft[terminal.lhs, right] = left
-				if right < minsplitright[terminal.lhs, left]:
-					minsplitright[terminal.lhs, left] = right
-				if right > maxsplitright[terminal.lhs, left]:
-					maxsplitright[terminal.lhs, left] = right
-		# unary rules on POS tags 
-		for rule in <list>grammar.unary:
-			if rule.lhs in cell and cell.get(rule.rhs1, False):
-				prob = rule.prob + cell[rule.rhs1][0].inside
-				if not cell[rule.lhs] or prob < cell[rule.lhs][0].inside:
-					cell[rule.lhs].append(new_Edge(prob, rule, right))
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
+		# unary rules on the span of this POS tag
+		# NB: for this agenda, only the probabilities of the edges matter
+		unaryagenda.update([(rhs1, edges[0]) for rhs1, edges in cell.iteritems() if edges])
+		while unaryagenda.length:
+			entry = unaryagenda.popentry()
+			for rule in <list>grammar.unarybyrhs[entry.key]:
+				if rule.lhs not in cell: continue
+				lhs = rule.lhs
+				prob = rule.prob + (<Edge>entry.value).inside
+				edge = new_Edge(prob, rule, right)
+				if cell[lhs]:
+					cell[lhs].append(edge)
+					if prob >= (<Edge>cell[lhs][0]).inside: continue
+					unaryagenda.setitem(lhs, edge)
 					# switch previous best & new best
-					(cell[rule.lhs][0], cell[rule.lhs][-1]) = (
-						cell[rule.lhs][-1], cell[rule.lhs][0])
-					# update filter
-					if left > minsplitleft[rule.lhs, right]:
-						minsplitleft[rule.lhs, right] = left
-					if left < maxsplitleft[rule.lhs, right]:
-						maxsplitleft[rule.lhs, right] = left
-					if right < minsplitright[rule.lhs, left]:
-						minsplitright[rule.lhs, left] = right
-					if right > maxsplitright[rule.lhs, left]:
-						maxsplitright[rule.lhs, left] = right
-				else:
-					cell[rule.lhs].append(new_Edge(prob, rule, right))
-
+					#cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], <Edge>entry.value
+					cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], cell[lhs][0]
+					continue
+				cell[lhs] = [edge]
+				# update filter
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
 	for span in range(2, lensent + 1):
 		print span,
 		sys.stdout.flush()
@@ -267,88 +247,78 @@ def parse_nomatrix(list sent, Grammar grammar, chart):
 			for lhs, rules in enumerate(<list>grammar.binary):
 				if lhs not in cell: continue
 				for rule in <list>rules:
-					narrowr = minsplitright[rule.rhs1, left]
-					if narrowr >= right: continue
-					narrowl = minsplitleft[rule.rhs2, right]
-					if narrowl < narrowr: continue
-					widel = maxsplitleft[rule.rhs2, right]
-					minmid = smax(narrowr, widel)
-					wider = maxsplitright[rule.rhs1, left]
-					maxmid = smin(wider, narrowl) + 1
-					oldscore = cell[lhs][0].inside if cell[lhs] else infinity
+					narrowr = minright[rule.rhs1, left]
+					narrowl = minleft[rule.rhs2, right]
+					if narrowr >= right or narrowl < narrowr: continue
+					minmid = smax(narrowr, maxleft[rule.rhs2, right])
+					maxmid = smin(maxright[rule.rhs1, left], narrowl) + 1
+					newspan = not cell[lhs]
 					foundbetter = False
 					for mid in range(minmid, maxmid):
-						if (chart[left][mid].get(rule.rhs1, False)
-							and chart[mid][right].get(rule.rhs2, False)):
+						if (chart[left][mid].get(rule.rhs1)
+							and chart[mid][right].get(rule.rhs2)):
 							prob = (rule.prob
-								+ chart[left][mid][rule.rhs1][0].inside
-								+ chart[mid][right][rule.rhs2][0].inside)
-							if not cell[lhs] or prob < cell[lhs][0].inside:
+								+ (<Edge>chart[left][mid][rule.rhs1][0]).inside
+								+ (<Edge>chart[mid][right][rule.rhs2][0]).inside)
+							if not cell[lhs] or prob < (<Edge>cell[lhs][0]).inside:
 								foundbetter = True
 								cell[lhs].append(new_Edge(prob, rule, mid))
 								# switch previous best & new best
-								(cell[lhs][0], cell[lhs][-1]) = (
-									cell[lhs][-1], cell[lhs][0])
-							else:
-								cell[lhs].append(new_Edge(prob, rule, mid))
+								cell[lhs][0], cell[lhs][-1] = (
+										cell[lhs][-1], cell[lhs][0])
+							else: cell[lhs] = [new_Edge(prob, rule, mid)]
 					# update filter
-					if foundbetter and isinf(oldscore):
-						if left > minsplitleft[lhs, right]:
-							minsplitleft[lhs, right] = left
-						if left < maxsplitleft[lhs, right]:
-							maxsplitleft[lhs, right] = left
-						if right < minsplitright[lhs, left]:
-							minsplitright[lhs, left] = right
-						if right > maxsplitright[lhs, left]:
-							maxsplitright[lhs, left] = right
+					if not foundbetter or not newspan: continue
+					if left > minleft[lhs, right]: minleft[lhs, right] = left
+					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+					if right < minright[lhs, left]: minright[lhs, left] = right
+					if right > maxright[lhs, left]: maxright[lhs, left] = right
 
 			# unary rules
-			for rule in <list>grammar.unary:
-				if rule.lhs in cell and cell.get(rule.rhs1, False):
-					prob = rule.prob + cell[rule.rhs1][0].inside
-					if not cell[rule.lhs] or prob < cell[rule.lhs][0].inside:
-						cell[rule.lhs].append(new_Edge(prob, rule, right))
+			unaryagenda.update([(rhs1, edges[0]) for rhs1, edges in cell.iteritems() if edges])
+			while unaryagenda.length:
+				entry = unaryagenda.popentry()
+				for rule in <list>grammar.unarybyrhs[entry.key]:
+					if rule.lhs not in cell: continue
+					lhs = rule.lhs
+					prob = rule.prob + (<Edge>entry.value).inside
+					edge = new_Edge(prob, rule, right)
+					if cell[lhs]:
+						cell[lhs].append(edge)
+						if prob >= (<Edge>cell[lhs][0]).inside: continue
+						unaryagenda.setitem(lhs, edge)
 						# switch previous best & new best
-						(cell[rule.lhs][0], cell[rule.lhs][-1]) = (
-							cell[rule.lhs][-1], cell[rule.lhs][0])
-						# update filter
-						if left > minsplitleft[rule.lhs, right]:
-							minsplitleft[rule.lhs, right] = left
-						if left < maxsplitleft[rule.lhs, right]:
-							maxsplitleft[rule.lhs, right] = left
-						if right < minsplitright[rule.lhs, left]:
-							minsplitright[rule.lhs, left] = right
-						if right > maxsplitright[rule.lhs, left]:
-							maxsplitright[rule.lhs, left] = right
-					else:
-						cell[rule.lhs].append(new_Edge(prob, rule, right))
+						#cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], <Edge>entry.value
+						cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], cell[lhs][0]
+						continue
+					cell[lhs] = [edge]
+					# update filter
+					if left > minleft[lhs, right]: minleft[lhs, right] = left
+					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+					if right < minright[lhs, left]: minright[lhs, left] = right
+					if right > maxright[lhs, left]: maxright[lhs, left] = right
 	print
 	return chart
 
 def doinsideoutside(list sent, Grammar grammar, inside, outside):
-	lensent = len(sent); numsymbols = len(grammar.toid)
-	start = ChartItem(grammar.toid["TOP"], 0, lensent)
+	start = grammar.toid["TOP"]
+	lensent = len(sent)
+	numsymbols = len(grammar.toid)
 	if inside == None:
-		inside = np.array([0.0], dtype='d'
-			).repeat(lensent * (lensent+1) * numsymbols
-			).reshape((numsymbols, lensent, (lensent+1)))
-	else:
-		inside[:,:len(sent),:len(sent)+1] = 0.0
+		inside = np.zeros((lensent, lensent+1, numsymbols), dtype='d')
+	else: inside[:len(sent), :len(sent)+1, :] = 0.0
 	if outside == None:
-		outside = np.array([0.0], dtype='d'
-			).repeat(lensent * (lensent+1) * numsymbols
-			).reshape((numsymbols, lensent, (lensent+1)))
-	else:
-		outside[:,:len(sent),:len(sent)+1] = 0.0
-	isl, asl, isr, asr = insidescores(sent, grammar, inside)
-	outside = outsidescores(inside, start, grammar, outside, isl, asl, isr, asr)
+		outside = np.zeros((lensent, lensent+1, numsymbols), dtype='d')
+	else: outside[:len(sent), :len(sent)+1, :] = 0.0
+	minmaxlr = insidescores(sent, grammar, inside)
+	outside = outsidescores(grammar, start, lensent, inside, outside, *minmaxlr)
 	return inside, outside
 
-cdef insidescores(list sent, Grammar grammar,
+def insidescores(list sent, Grammar grammar,
 	np.ndarray[np.double_t, ndim=3] inside):
-	""" Grammar must not have log probabilities. """
+	""" Compute (viterbi?) inside scores. """
 	cdef short left, right, mid, span, lensent = len(sent)
-	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
+	cdef short narrowl, narrowr, minmid, maxmid
 	cdef long numsymbols = len(grammar.toid), lhs
 	cdef double oldscore, prob, ls, rs, ins
 	cdef bint foundbetter = False
@@ -356,50 +326,38 @@ cdef insidescores(list sent, Grammar grammar,
 	cdef Terminal terminal
 	cdef unicode word
 	# matrices for the filter which give minima and maxima for splits
-	cdef np.ndarray[np.int16_t, ndim=2] minsplitleft = np.array([-1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)
-		).reshape(numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] maxsplitleft = np.array([lensent+1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
-		numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] minsplitright = np.array([lensent + 1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)
-		).reshape(numsymbols, lensent + 1)
-	cdef np.ndarray[np.int16_t, ndim=2] maxsplitright = np.array([-1],
-		dtype='int16').repeat(numsymbols * (lensent + 1)).reshape(
-		numsymbols, lensent + 1)
-	inside[:,:lensent,:lensent+1] = 0.0
-	print "inside",
+	cdef np.ndarray[np.int16_t, ndim=2] minleft, maxleft, minright, maxright
+	minleft = np.empty((numsymbols, lensent+1), dtype='int16'); minleft.fill(-1)
+	maxleft = np.empty_like(minleft); maxleft.fill(lensent+1)
+	minright = np.empty_like(minleft); minright.fill(lensent+1)
+	maxright = np.empty_like(minleft); maxright.fill(-1)
+	inside[:lensent, :lensent+1, :] = 0.0
+	assert not grammar.logprob, "Grammar must not have log probabilities."
+	print "inside ",
 	# assign POS tags
 	for left in range(lensent):
 		right = left + 1
 		word = unicode(sent[left]) if sent[left] in grammar.lexicon else u""
 		for terminal in <list>grammar.lexical:
 			if terminal.word == word:
-				inside[terminal.lhs, left, right] = terminal.prob
+				lhs = terminal.lhs
+				inside[left, right, lhs] = terminal.prob
 				# update filter
-				if left > minsplitleft[terminal.lhs, right]:
-					minsplitleft[terminal.lhs, right] = left
-				if left < maxsplitleft[terminal.lhs, right]:
-					maxsplitleft[terminal.lhs, right] = left
-				if right < minsplitright[terminal.lhs, left]:
-					minsplitright[terminal.lhs, left] = right
-				if right > maxsplitright[terminal.lhs, left]:
-					maxsplitright[terminal.lhs, left] = right
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
 		# unary rules on POS tags 
 		for rule in <list>grammar.unary:
-			if inside[rule.rhs1, left, right] != 0.0:
-				prob = rule.prob * inside[rule.rhs1, left, right]
-				inside[rule.lhs, left, right] += prob
+			if inside[left, right, rule.rhs1 ] != 0.0:
+				lhs = rule.lhs
+				prob = rule.prob * inside[left, right, rule.rhs1]
+				inside[left, right, lhs] += prob
 				# update filter
-				if left > minsplitleft[rule.lhs, right]:
-					minsplitleft[rule.lhs, right] = left
-				if left < maxsplitleft[rule.lhs, right]:
-					maxsplitleft[rule.lhs, right] = left
-				if right < minsplitright[rule.lhs, left]:
-					minsplitright[rule.lhs, left] = right
-				if right > maxsplitright[rule.lhs, left]:
-					maxsplitright[rule.lhs, left] = right
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
 	for span in range(1, lensent + 1):
 		print span,
 		sys.stdout.flush()
@@ -409,65 +367,55 @@ cdef insidescores(list sent, Grammar grammar,
 			# binary
 			for lhs, rules in enumerate(grammar.binary):
 				for rule in rules:
-					narrowr = minsplitright[rule.rhs1, left]
-					if narrowr >= right: continue
-					narrowl = minsplitleft[rule.rhs2, right]
-					if narrowl < narrowr: continue
-					widel = maxsplitleft[rule.rhs2, right]
-					minmid = smax(narrowr, widel)
-					wider = maxsplitright[rule.rhs1, left]
-					maxmid = smin(wider, narrowl) + 1
-					#oldscore = inside[lhs, left, right]
+					narrowr = minright[rule.rhs1, left]
+					narrowl = minleft[rule.rhs2, right]
+					if narrowr >= right or narrowl < narrowr: continue
+					minmid = smax(narrowr, maxleft[rule.rhs2, right])
+					maxmid = smin(maxright[rule.rhs1, left], narrowl) + 1
+					#oldscore = inside[left, right, lhs]
 					foundbetter = False
 					for split in range(minmid, maxmid):
-						ls = inside[rule.rhs1, left, split]
+						ls = inside[left, split, rule.rhs1]
 						if ls == 0.0: continue
-						rs = inside[rule.rhs2, split, right]
+						rs = inside[split, right, rule.rhs2]
 						if rs == 0.0: continue
 						foundbetter = True
-						inside[rule.lhs, left, right] += rule.prob * ls * rs
+						inside[left, right, rule.lhs] += rule.prob * ls * rs
 					if foundbetter: #and oldscore == 0.0:
-						if left > minsplitleft[rule.lhs, right]:
-							minsplitleft[rule.lhs, right] = left
-						if left < maxsplitleft[rule.lhs, right]:
-							maxsplitleft[rule.lhs, right] = left
-						if right < minsplitright[rule.lhs, left]:
-							minsplitright[rule.lhs, left] = right
-						if right > maxsplitright[rule.lhs, left]:
-							maxsplitright[rule.lhs, left] = right
+						if left > minleft[lhs,right]: minleft[lhs,right] = left
+						if left < maxleft[lhs,right]: maxleft[lhs,right] = left
+						if right < minright[lhs,left]: minright[lhs,left] = right
+						if right > maxright[lhs,left]: maxright[lhs,left] = right
 			# unary
 			for rule in grammar.unary:
-				ins = inside[rule.rhs1, left, right]
+				lhs = rule.lhs
+				ins = inside[left, right, rule.rhs1]
 				if ins == 0.0: continue
-				inside[rule.lhs, left, right] += ins * rule.prob
-				if left > minsplitleft[rule.lhs, right]:
-					minsplitleft[rule.lhs, right] = left
-				if left < maxsplitleft[rule.lhs, right]:
-					maxsplitleft[rule.lhs, right] = left
-				if right < minsplitright[rule.lhs, left]:
-					minsplitright[rule.lhs, left] = right
-				if right > maxsplitright[rule.lhs, left]:
-					maxsplitright[rule.lhs, left] = right
+				inside[left, right, lhs] += ins * rule.prob
+				if left > minleft[lhs, right]: minleft[lhs, right] = left
+				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
+				if right < minright[lhs, left]: minright[lhs, left] = right
+				if right > maxright[lhs, left]: maxright[lhs, left] = right
 	print
-	return maxsplitleft, minsplitleft, maxsplitright, minsplitright
+	return minleft, maxleft, minright, maxright
 
-cdef outsidescores(np.ndarray[np.double_t, ndim=3] inside,
-	ChartItem start,
-	Grammar grammar,
+def outsidescores(Grammar grammar, long start, short lensent,
+	np.ndarray[np.double_t, ndim=3] inside,
 	np.ndarray[np.double_t, ndim=3] outside,
-	np.ndarray[np.int16_t, ndim=2] minsplitleft,
-	np.ndarray[np.int16_t, ndim=2] maxsplitleft,
-	np.ndarray[np.int16_t, ndim=2] minsplitright,
-	np.ndarray[np.int16_t, ndim=2] maxsplitright):
-	cdef short left, right, mid, span, lensent = start.right
-	cdef short narrowr, narrowl, widel, wider, minmid, maxmid
+	np.ndarray[np.int16_t, ndim=2] minleft,
+	np.ndarray[np.int16_t, ndim=2] maxleft,
+	np.ndarray[np.int16_t, ndim=2] minright,
+	np.ndarray[np.int16_t, ndim=2] maxright):
+	cdef short left, right, mid, span
+	cdef short narrowl, narrowr, minmid, maxmid
 	cdef long numsymbols = len(grammar.toid), lhs, rhs1, rhs2
-	cdef double oldscore, ls, rs, os
+	cdef double ls, rs, os
 	cdef bint foundbetter = False
 	cdef Rule rule
 	cdef Terminal terminal
 	cdef unicode word
-	outside[start.label, 0, lensent] = 1.0
+	assert not grammar.logprob, "Grammar must not have log probabilities."
+	outside[0, lensent, start] = 1.0
 	print "outside",
 	for span in range(lensent, 0, -1):
 		print span,
@@ -477,30 +425,26 @@ cdef outsidescores(np.ndarray[np.double_t, ndim=3] inside,
 			right = left + span
 			# unary
 			for rule in grammar.unary:
-				os = outside[rule.lhs, left, right]
+				os = outside[left, right, rule.lhs]
 				if os == 0.0: continue
-				outside[rule.rhs1, left, right] += os * rule.prob
+				outside[left, right, rule.rhs1] += os * rule.prob
 			# binary
 			for lhs, rules in enumerate(grammar.binary):
 				for rule in rules:
-					os = outside[lhs, left, right]
+					os = outside[left, right, lhs]
 					if os == 0.0: continue
-					narrowr = minsplitright[rule.rhs1, left]
-					#if narrowr >= right: continue
-					narrowl = minsplitleft[rule.rhs2, right]
-					#if narrowl < narrowr: continue
-					widel = maxsplitleft[rule.rhs2, right]
-					minmid = smax(narrowr, widel)
-					wider = maxsplitright[rule.rhs1, left]
-					maxmid = smin(wider, narrowl) + 1
-					#for split in range(minmid, maxmid):
-					for split in range(left + 1, right):
-						ls = inside[rule.rhs1, left, split]
+					narrowr = minright[rule.rhs1, left]
+					narrowl = minleft[rule.rhs2, right]
+					if narrowr >= right or narrowl < narrowr: continue
+					minmid = smax(narrowr, maxleft[rule.rhs2, right])
+					maxmid = smin(maxright[rule.rhs1, left], narrowl) + 1
+					for split in range(minmid, maxmid):
+						ls = inside[left, split, rule.rhs1]
 						if ls == 0.0: continue
-						rs = inside[rule.rhs2, split, right]
+						rs = inside[split, right, rule.rhs2]
 						if rs == 0.0: continue
-						outside[rule.rhs1, left, split] += rule.prob * rs * os
-						outside[rule.rhs2, split, right] += rule.prob * ls * os
+						outside[left, split, rule.rhs1] += rule.prob * rs * os
+						outside[split, right, rule.rhs2] += rule.prob * ls * os
 	print
 	return outside
 
@@ -526,6 +470,10 @@ def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
 	cdef dict chart = {}	#chart[left, right][label]
 	cdef tuple a, b, c
 	cdef Rule rule
+	assert grammar.logprob, "Grammar should have log probabilities."
+	# log probabilities are not ideal here because we do lots of additions,
+	# but the probabilities are very small. a possible alternative is to scale
+	# them somehow.
 
 	# add all possible POS tags
 	chart.update(lexchart)
@@ -563,7 +511,6 @@ def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
 		else: raise ValueError("expected binary tree.")
 	return chart.get((grammar.toid[tree.node], 0, len(tree.leaves())), neginf)
 
-
 # to avoid overhead of __init__ and __cinit__ constructors
 # belongs in containers but putting it here gives
 # a better chance of successful inlining
@@ -594,6 +541,7 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 	symbols = ["Epsilon"] + sorted(nonterminals)
 	toid = dict((a, n) for n,a in enumerate(symbols))
 	tolabel = dict(enumerate(symbols))
+	unarybyrhs = [[] for a in symbols]
 	binary = [[] for a in symbols]
 	fd = defaultdict(float)
 	for a in open(rules):
@@ -602,7 +550,9 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 		lhs = toid[rule[1]]
 		rhs1 = toid[rule[2]]
 		if len(rule) == 3:
-			unary.append(Rule(lhs, rhs1, 0, freq))
+			rule = Rule(lhs, rhs1, 0, freq)
+			unary.append(rule)
+			unarybyrhs[rhs1].append(rule)
 		elif len(rule) == 4:
 			rhs2 = toid[rule[3]]
 			binary[lhs].append(Rule(lhs, rhs1, rhs2, freq))
@@ -641,7 +591,8 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 		#prevent cycles
 		if a.prob == 0.0: a.prob = 0.0001
 	print "finished"
-	return Grammar(lexical, unary, binary, tolabel, toid, lexicon)
+	return Grammar(lexical, unary, unarybyrhs, binary, tolabel, toid,
+			lexicon, logprob)
 
 def reestimate(Grammar coarse, Grammar fine):
 	""" Modify probabilities of coarse grammar such that the are the sum
@@ -698,7 +649,8 @@ def getgrammarmapping(coarse, fine):
 
 def cachingdopparseprob(tree, Grammar grammar, dict mapping, dict cache):
 	""" Given an NLTK tree, compute the DOP parse probability given a
-	DOP reduction. """
+	DOP reduction.
+	Experimental version which maintains a memoization table. """
 	#from bigfloat import BigFloat, setcontext, quadruple_precision
 	#setcontext(quadruple_precision)
 	#chart = defaultdict(lambda: BigFloat(0))
@@ -781,9 +733,9 @@ def pprint_matrix(matrix, sent, tolabel):
 	for lhs in tolabel:
 		for left in range(len(sent)):
 			for right in range(left + 1, len(sent) + 1):
-				if matrix[lhs, left, right]:
+				if matrix[left, right, lhs]:
 					print "%s[%d:%d] = %f" % (
-						tolabel[lhs], left, right, matrix[lhs, left, right])
+						tolabel[lhs], left, right, matrix[left, right, lhs])
 
 
 def pprint_chart(chart, sent, tolabel):
@@ -791,9 +743,11 @@ def pprint_chart(chart, sent, tolabel):
 	cdef Edge edge
 	print "chart:"
 	for left in range(len(sent)):
-		for right in range(left, len(sent)):
+		for right in range(left + 1, len(sent) + 1):
 			for label, edges in chart[left][right].items():
-				print "%s[%d:%d] =>" % (tolabel[label], left, right)
+				print "%s[%d:%d] =>" % (tolabel[label], left, right),
+				if not edges: print "[]"
+				else: print
 				for edge in edges:
 					print "%g\t%g" % (exp(-edge.inside), exp(-edge.rule.prob)),
 					if edge.rule.rhs1:

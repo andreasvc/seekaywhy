@@ -1,48 +1,17 @@
 """ Implementation of Huang & Chiang (2005): Better k-best parsing
 """
+import logging
 from math import exp, fsum
-import numpy as np
 from agenda import Agenda, Entry
 from containers import ChartItem, Edge, RankedEdge
 from operator import itemgetter
-try: assert nsmallest(1, [1]) == [1]
-except NameError: from heapq import *
 
-unarybest = (0, )
-binarybest = (0, 0)
+from agenda cimport Entry, Agenda, nsmallest
+from containers cimport ChartItem, Edge, RankedEdge, new_RankedEdge
+cdef double infinity = float('infinity')
+cdef tuple unarybest = (0, ), binarybest = (0, 0)
 
-#def getkbestparses(k, sent, goal, viterbi, grammar):
-#	start = 0
-#	end = len(sent)
-#	kbesttrees = []
-#	explored = set()
-#	D = {}
-#	cand = {}
-#	for i in range(k + 1):
-#		tree = gettree(goal, i, k, D, grammar)
-#		if tree is None: break
-#		kbesttrees.append((tree, D[goal][-1]))
-#	return kbesttrees
-#
-#def gettree(v, k, k1, D, grammar):
-#	lazykthbest(v, k, k1, D, cand, viterbi, explored)
-#	if v.rhs1 == 0: #is tag
-#		# ...
-#		return tagnode
-#
-#	if k - 1 >= len(D[v]): return None
-#
-#	d = D[v][0]
-#	child = ChartItem(d.edge.rule.rhs1, v.left, d.edge.split)
-#	t = gettree(child, d.left, k1, D, grammar)
-#	children = [t]
-#	if d.right != -1:
-#		child = ChartItem(d.edge.rule.rhs2, d.edge.split, v.right)
-#		t = gettree(child, d.right, k1, D, grammar)
-#		children.append(t)
-#	return "(%s %s)" % (grammar.tolabel[v.label], "".join(children))
-
-def getcandidates(chart, v, k):
+cdef inline getcandidates(list chart, ChartItem v, int k):
 	""" Return a heap with up to k candidate arcs starting from vertex v """
 	# NB: the priority queue should either do a stable sort, or should
 	# sort on rank vector as well to have ties resolved in FIFO order;
@@ -51,7 +20,8 @@ def getcandidates(chart, v, k):
 	# three probability y), in which case insertion order should count.
 	# Otherwise (1, 1) ends up in D[v] after which (0. 1) generates it
 	# as a neighbor and puts it in cand[v] for a second time.
-	if not chart[v.left][v.right].get(v.label, False):
+	cdef Edge edge
+	if not chart[v.left][v.right].get(v.label):
 		#shouldn't raise error because terminals should end here
 		#raise ValueError("%r not in chart" % v)
 		return Agenda()
@@ -59,7 +29,10 @@ def getcandidates(chart, v, k):
 		[(RankedEdge(v, edge, 0, 0 if edge.rule.rhs2 else -1), edge.inside)
 					for edge in nsmallest(k, chart[v.left][v.right][v.label])])
 
-def lazykthbest(v, k, k1, D, cand, chart, explored):
+cpdef inline lazykthbest(ChartItem v, int k, int k1, dict D, dict cand,
+	list chart, set explored):
+	cdef RankedEdge ej
+	cdef Entry entry
 	# k1 is the global k
 	## first visit of vertex v?
 	# initialize the heap
@@ -78,7 +51,10 @@ def lazykthbest(v, k, k1, D, cand, chart, explored):
 		else: break
 	return D
 
-def lazynext(ej, k1, D, cand, chart, explored):
+cdef inline lazynext(RankedEdge ej, int k1, dict D, dict cand,
+	list chart, set explored):
+	cdef RankedEdge ej1
+	cdef double prob
 	# add the |e| neighbors
 	for i in range(2):
 		if i == 0:
@@ -100,17 +76,20 @@ def lazynext(ej, k1, D, cand, chart, explored):
 			cand[ej1.head][ej1] = prob
 			explored.add(ej1)
 
-def getprob(chart, D, ej):
-	e = ej.edge
-	eleft = ChartItem(e.rule.rhs1, ej.head.left, e.split)
+cdef inline double getprob(list chart, dict D, RankedEdge ej) except -1:
+	cdef double result, prob
+	cdef int i
+	cdef Entry entry
+	cdef Edge e = ej.edge
+	cdef ChartItem eright, eleft = ChartItem(e.rule.rhs1, ej.head.left, e.split)
 	if eleft in D: # and ej.left < len(D[eleft]):
 		entry = D[eleft][ej.left]; prob = entry.value
 	elif ej.left == 0:
-		if chart[eleft.left][eleft.right].get(eleft.label, False):
+		if chart[eleft.left][eleft.right].get(eleft.label):
 			edge = chart[ej.head.left][e.split][e.rule.rhs1][0]
 			prob = edge.inside
 		else:
-			prob = np.inf
+			prob = infinity
 			print "not found left:", ej
 	else: raise ValueError("non-zero rank vector not part of explored derivations")
 	result = e.rule.prob + prob
@@ -119,24 +98,29 @@ def getprob(chart, D, ej):
 		if eright in D: # and ej.right < len(D[eright]):
 			entry = D[eright][ej.right]; prob = entry.value
 		elif ej.right == 0:
-			if chart[eright.left][eright.right].get(eright.label, False):
+			if chart[eright.left][eright.right].get(eright.label):
 				edge = chart[e.split][ej.head.right][e.rule.rhs2][0]
 				prob = edge.inside
 			else:
-				prob = np.inf
+				prob = infinity
 				print "not found right:", ej
 
 		else: raise ValueError("non-zero rank vector not part of explored derivations")
 		result += prob
 	return result
 
-def getderivation(ej, D, chart, tolabel, sent, n):
+cdef inline str getderivation(RankedEdge ej, dict D, list chart, dict tolabel,
+		list sent, int n):
 	""" Translate the (e, j) notation to an actual tree string in
 	bracket notation.  e is an edge, j is a vector prescribing the rank of the
 	corresponding tail node. For example, given the edge <S, [NP, VP], 1.0> and
 	vector [2, 1], this points to the derivation headed by S and having the 2nd
 	best NP and the 1st best VP as children.
 	"""
+	cdef Edge edge, e
+	cdef ChartItem ei
+	cdef int i
+	cdef list children
 	if n > 100: return ""	#hardcoded limit to prevent cycles
 	e = ej.edge
 	children = []
@@ -144,7 +128,7 @@ def getderivation(ej, D, chart, tolabel, sent, n):
 	eright = ChartItem(e.rule.rhs2, e.split, ej.head.right)
 	for ei, i in ((eleft, ej.left), (eright, ej.right)):
 		if i == -1: break
-		if chart[ei.left][ei.right].get(ei.label, False):
+		if chart[ei.left][ei.right].get(ei.label):
 			if ei in D:
 				entry = D[ei][i]
 				children.append(
@@ -163,7 +147,7 @@ def getderivation(ej, D, chart, tolabel, sent, n):
 	if "" in children: return ""
 	return "(%s %s)" % (tolabel[ej.head.label], "".join(children))
 
-def lazykbest(chart, goal, k, tolabel, sent):
+def lazykbest(list chart, ChartItem goal, int k, dict tolabel, list sent):
 	""" wrapper function to run lazykthbest and get the actual derivations.
 	chart is a monotone hypergraph; should be acyclic unless probabilities
 	resolve the cycles (maybe nonzero weights for unary productions are
@@ -175,7 +159,8 @@ def lazykbest(chart, goal, k, tolabel, sent):
 	k is the number of derivations desired.
 	tolabel is a dictionary mapping numeric IDs to the original nonterminal
 	labels.  """
-	import logging
+	cdef Entry entry
+	cdef double prob
 	D = {}
 	cand = {}
 	explored = set()

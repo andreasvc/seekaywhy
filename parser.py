@@ -1,10 +1,11 @@
 import sys, time, re
+from getopt import gnu_getopt
 from operator import itemgetter
 from math import exp, log, isinf
 from heapq import nlargest
 import numpy as np
 from nltk import Tree
-from cky import parse, parse_nomatrix, readbitpargrammar, doinsideoutside, \
+from cky import parse, parse_sparse, readbitpargrammar, doinsideoutside, \
 	pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, \
 	cachingdopparseprob, doplexprobs
 from kbest import lazykbest
@@ -14,13 +15,49 @@ from coarsetofine import whitelistfromkbest, whitelistfromposteriors, \
 from disambiguation import marginalize
 removeids = re.compile("@[0-9_]+")
 
-def mainsimple(unknownwords):
-	k = 1
-	grammar = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords)
-	if len(sys.argv) >= 4: input = open(sys.argv[3])
-	else: input = sys.stdin
-	if len(sys.argv) == 5: out = open(sys.argv[4], "w")
-	else: out = sys.stdout
+usage = """usage: %s [options] rules lexicon [input [output]]
+or: %s [--rerank] [options] coarserules coarselexicon finerules finelexicon \
+[input [output]]
+
+Grammars need to be binarized, and are in bitpar format.
+When no file is given, output is written to standard output; when additionally
+no input is given, it is raed from standard input.
+
+Options:
+-u file         handle unknown words using given open class tags list
+-b k            return the k-best parses instead of just 1
+--prob          print probabilities as well as parse trees
+--threshold p   in coarse-to-fine mode, the posterior threshold (as log prob)
+--rerank k      enable DOP reranking mode: find DOP parse probabilities
+                for k coarse derivations.
+""" % (sys.argv[0], sys.argv[0])
+#TODO: --quiet         produce no output except parses
+#--kbestctf k    use k-best coarse-to-fine; instead of posterior threshold,
+#				use k-best derivations as threshold
+
+def main():
+	print "SeeKayWhy PCFG parser - Andreas van Cranenburgh"
+	options = ("quiet", "prob", "rerank=", "threshold=", "kbestctf=")
+	opts, args = gnu_getopt(sys.argv[1:], "u:b:", options)
+	opts = dict(opts)
+	unknownwords = opts.get("-u")
+	k = opts.get("-b", 1)
+	if 2 <= len(args) <= 4:
+		simple(args, unknownwords, k)
+	elif 4 <= len(args) <= 6 and "--rerank" in opts:
+			rerank(args, unknownwords, k, int(opts['--rerank']))
+	elif 4 <= len(args) <= 6:
+		if "--kbestctf" in opts:
+			threshold = int(opts.get("--kbestctf"))
+		else: threshold = float(opts.get("--threshold", -6.2)) #0.01
+		ctf(args, unknownwords, k, threshold, posterior=not opts.get("--kbestctf"))
+	else: print usage
+
+def simple(args, unknownwords, k):
+	grammar = readbitpargrammar(args[0], args[1], unknownwords)
+	input = sys.stdin; out = sys.stdout
+	if len(args) >= 3: input = open(args[2])
+	if len(args) == 4: out = open(args[3], "w")
 	times = [time.clock()]
 	for n, a in enumerate(input.read().split("\n\n")):
 		if not a.strip(): continue
@@ -33,7 +70,7 @@ def mainsimple(unknownwords):
 		chart, viterbi = parse(sent, grammar, None)
 		start = ChartItem(grammar.toid["TOP"], 0, len(sent))
 		#pprint_chart(chart, sent, grammar.tolabel)
-		if chart[0][len(sent)].get(grammar.toid["TOP"], False):
+		if chart[0][len(sent)].get(grammar.toid["TOP"]):
 			parsetrees = lazykbest(chart, start, k, grammar.tolabel, sent)
 			assert len(parsetrees) == len(set(parsetrees))
 			assert len(parsetrees) == len(set(tree for tree, prob in parsetrees))
@@ -53,33 +90,28 @@ def mainsimple(unknownwords):
 	print "finished"
 	out.close()
 
-def mainctf(unknownwords):
-	k = 1000
+def ctf(args, unknownwords, k, threshold, posterior=True, mpd=False):
 	m = 10000
-	threshold = exp(-6.2) #0.01
+	derivthreshold = 1000	# kbest derivations to prune with
+	if posterior: threshold = exp(threshold)
 	maxlen = 65
 	unparsed = 0
-	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords, logprob=False)
-	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, freqs=False)
+	coarse = readbitpargrammar(args[0], args[1], unknownwords, logprob=not posterior)
+	fine = readbitpargrammar(args[2], args[3], unknownwords, freqs=False)
 	for a in fine.toid:
 		assert a.rsplit("@", 1)[0] in coarse.toid, "%s not in coarse grammar" % a
-	if len(sys.argv) >= 6: input = open(sys.argv[5])
-	else: input = sys.stdin
-	if len(sys.argv) == 7: out = open(sys.argv[6], "w")
-	else: out = sys.stdout
+	input = sys.stdin; out = sys.stdout
+	if len(args) >= 5: input = open(args[4])
+	if len(args) == 6: out = open(args[5], "w")
 	times = [time.clock()]
-	coarsechart = np.array([np.inf], dtype='d').repeat(
-					maxlen * (maxlen + 1) * len(coarse.toid)
-					).reshape((len(coarse.toid), maxlen, maxlen + 1))
-	inside = np.array([0.0], dtype='d').repeat(
-					maxlen * (maxlen + 1) * len(coarse.toid)
-					).reshape((len(coarse.toid), maxlen, maxlen + 1))
-	outside = np.array([0.0], dtype='d').repeat(
-					maxlen * (maxlen + 1) * len(coarse.toid)
-					).reshape((len(coarse.toid), maxlen, maxlen + 1))
-	#finechart = np.array([np.NAN], dtype='d').repeat(
-	#				maxlen * (maxlen + 1) * len(fine.toid)
-	#				).reshape((len(fine.toid), maxlen, maxlen + 1))
+	if posterior:
+		inside = np.zeros((maxlen, maxlen + 1, len(coarse.toid)), dtype='d')
+		outside = np.zeros_like(inside)
+	else:
+		coarsechart = np.empty((maxlen, maxlen + 1, len(coarse.toid)), dtype='d')
+		coarsechart.fill(np.inf)
+		finechart = np.empty_like(coarsechart)
+		finechart.fill(np.NAN)
 	mapping = nonterminalmapping(coarse, fine)
 
 	for n, a in enumerate(input.read().split("\n\n")):
@@ -87,44 +119,45 @@ def mainctf(unknownwords):
 		sent = a.splitlines()
 		if len(sent) > maxlen: continue
 		for word in sent:
-			assert unknownwords or (word in coarse.lexicon and word in fine.lexicon), "unknown word and no open class tags supplied"
+			assert unknownwords or (
+				word in coarse.lexicon and word in fine.lexicon), (
+				"unknown word and no open class tags supplied")
 		print "parsing:", n, " ".join(sent)
 		start = ChartItem(coarse.toid["TOP"], 0, len(sent))
-		#coarsechart[:,:len(sent),:len(sent)+1] = np.inf
-		#chart, coarsechart = parse(sent, coarse, coarsechart)
-		inside, outside = doinsideoutside(sent, coarse, inside, outside)
-		#print "inside"; pprint_matrix(inside, sent, coarse.tolabel)
-		#print "outside"; pprint_matrix(outside, sent, coarse.tolabel)
-		#if chart[0][len(sent)].get(coarse.toid["TOP"], False):
-		if inside[coarse.toid["TOP"], 0, len(sent)] != 0.0:
+		if posterior:
+			inside, outside = doinsideoutside(sent, coarse, inside, outside)
+			#print "inside"; pprint_matrix(inside, sent, coarse.tolabel)
+			#print "outside"; pprint_matrix(outside, sent, coarse.tolabel)
+		else:
+			coarsechart[:len(sent), :len(sent)+1, :] = np.inf
+			chart, coarsechart = parse(sent, coarse, coarsechart)
+		if posterior: goalitem = inside[0, len(sent), coarse.toid["TOP"]]
+		else: goalitem = chart[0][len(sent)].get(coarse.toid["TOP"])
+		if goalitem:
 			print "pruning ...",
 			sys.stdout.flush()
-			#whitelistfromkbest(chart, start, coarse, fine, k, finechart, maxlen)
-			finechart = whitelistfromposteriors2(inside, outside, start, coarse, fine, mapping, maxlen, threshold)
+			if posterior:
+				finechart = whitelistfromposteriors2(inside, outside, start,
+					coarse, fine, mapping, maxlen, threshold)
+			else:
+				whitelistfromkbest(chart, start, coarse, fine, threshold,
+					finechart, maxlen)
 			#chart, finechart = parse(sent, fine, finechart)
-			chart = parse_nomatrix(sent, fine, finechart)
+			chart = parse_sparse(sent, fine, finechart)
 			start = ChartItem(fine.toid["TOP"], 0, len(sent))
-			#pprint_chart(chart, sent, fine.tolabel)
-			#for l, _ in enumerate(chart):
-			#	for r, _ in enumerate(chart[l]):
-			#		for label in chart[l][r]:
-			#			print fine.tolabel[label], label, l, r,
-			#			if chart[l][r][label]: print chart[l][r][label][0]
-			#			else: print []
 
-			#assert start in chart, "sentence covered by coarse grammar could not be parsed by fine grammar"
-			assert chart[0][len(sent)][fine.toid["TOP"]], "sentence covered by coarse grammar could not be parsed by fine grammar"
-			# MPP
-			parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m).items()
-			# print all parsetrees
-			#out.writelines("parseprob=%.16g\n%s\n" % (prob, tree) for tree, prob in parsetrees)
-			# most probable parse
-			out.write("prob=%.16g\n%s\n" % max(parsetrees, key=itemgetter(1))[::-1])
-			# MPD
-			#parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m, mpd=True).items()
-			# print 10-best derivations
-			#out.writelines("derivprob=%.16g\n%s\n" % (prob, tree) for tree, prob in nlargest(10, parsetrees, key=itemgetter(1)))
-
+			try:
+				assert chart[0][len(sent)][fine.toid["TOP"]], (
+				"sentence covered by coarse grammar could not be parsed "\
+				"by fine grammar")
+			except (AssertionError, KeyError):
+				pprint_chart(chart, sent, fine.tolabel)
+				raise
+			parsetrees = marginalize(chart, start, fine.tolabel, sent, n=m, mpd=mpd)
+			label = "derivprob" if mpd else "parseprob"
+			# print k-best parsetrees
+			out.writelines("%s=%.16g\n%s\n" % (label, parsetrees[tree], tree)
+				for tree in nlargest(k, parsetrees, key=parsetrees.get))
 		else:
 			unparsed += 1
 			print "No parse"
@@ -140,17 +173,16 @@ def mainctf(unknownwords):
 	print "finished"
 	out.close()
 
-def mainrerank(unknownwords):
-	k = 50
-	maxlen = 65
+def rerank(args, unknownwords, printk, k):
+	maxlen = 999 #??
 	unparsed = 0
-	coarse = readbitpargrammar(sys.argv[1], sys.argv[2], unknownwords, logprob=True)
-	fine = readbitpargrammar(sys.argv[3], sys.argv[4], unknownwords, freqs=False, logprob=True)
+	coarse = readbitpargrammar(args[0], args[1], unknownwords, logprob=True)
+	fine = readbitpargrammar(args[2], args[3], unknownwords, freqs=False, logprob=True)
 	for a in fine.toid:
 		assert a.rsplit("@", 1)[0] in coarse.toid, "%s not in coarse grammar" % a
-	if len(sys.argv) >= 6: input = open(sys.argv[5])
+	if len(args) >= 5: input = open(args[4])
 	else: input = sys.stdin
-	if len(sys.argv) == 7: out = open(sys.argv[6], "w")
+	if len(args) == 6: out = open(args[5], "w")
 	else: out = sys.stdout
 	times = [time.clock()]
 	mapping = getgrammarmapping(coarse, fine)
@@ -159,22 +191,24 @@ def mainrerank(unknownwords):
 		sent = a.splitlines()
 		if len(sent) > maxlen: continue
 		for word in sent:
-			assert unknownwords or (word in coarse.lexicon and word in fine.lexicon), "unknown word and no open class tags supplied"
+			assert unknownwords or (
+				word in coarse.lexicon and word in fine.lexicon), (
+				"unknown word and no open class tags supplied")
 		print "parsing:", n, " ".join(sent)
 		start = ChartItem(coarse.toid["TOP"], 0, len(sent))
 		chart, _ = parse(sent, coarse, None); print
-		if chart[0][len(sent)].get(coarse.toid["TOP"], False):
+		if chart[0][len(sent)].get(coarse.toid["TOP"]):
 			trees = []
 			candidates = lazykbest(chart, start, k, coarse.tolabel, sent)
 			lexchart = doplexprobs(Tree(candidates[0][0]), fine)
 			for m, (tree, prob) in enumerate(candidates):
-				trees.append((dopparseprob(Tree(tree), fine, mapping, lexchart), tree))
+				trees.append((dopparseprob(Tree(tree),
+						fine, mapping, lexchart), tree))
 				print m, exp(-prob), exp(trees[-1][0])
 				sys.stdout.flush()
-			prob, tree = max(trees)
-			prob = exp(prob)
-			print "\nprob=%g\n%s\n" % (prob, tree)
-			out.write("prob=%.16g\n%s\n" % (prob, tree))
+			# print k-best parsetrees
+			out.writelines("parseprob=%.16g\n%s\n" % (exp(prob), tree)
+				for prob, tree in nlargest(printk, trees))
 		else:
 			unparsed += 1
 			print "No parse"
@@ -197,24 +231,5 @@ def nonterminalmapping(coarse, fine):
 	for a, b in fine.toid.items():
 		mapping[coarse.toid[removeids.sub("", a)]].add(b)
 	return mapping
-
-def main():
-	print "SeeKayWhy PCFG parser - Andreas van Cranenburgh"
-	if "-u" in sys.argv:
-		i = sys.argv.index("-u")
-		unknownwords = sys.argv[i+1]
-		sys.argv[i:i+2] = []
-	else: unknownwords = None
-	if 2 <= len(sys.argv) <= 5: mainsimple(unknownwords)
-	elif 4 <= len(sys.argv) <= 8:
-		if sys.argv[1] == "rerank":
-			del sys.argv[1]
-			mainrerank(unknownwords)
-		elif len(sys.argv) <= 7:
-			mainctf(unknownwords)
-	else: #if len(sys.argv) < 3:
-		print "usage: %s rules lexicon [input [output]]" % sys.argv[0]
-		print "or: %s [rerank] coarserules coarselexicon finerules finelexicon [input [output]]" % sys.argv[0]
-		return
 
 if __name__ == '__main__': main()
