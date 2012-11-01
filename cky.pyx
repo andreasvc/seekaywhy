@@ -169,7 +169,7 @@ def parse(list sent, Grammar grammar, whitelist):
 					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
 					if right < minright[lhs, left]: minright[lhs, left] = right
 					if right > maxright[lhs, left]: maxright[lhs, left] = right
-	print
+	print >>stderr, ''
 	return chart, viterbi
 
 def parse_sparse(list sent, Grammar grammar, chart):
@@ -298,7 +298,7 @@ def parse_sparse(list sent, Grammar grammar, chart):
 					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
 					if right < minright[lhs, left]: minright[lhs, left] = right
 					if right > maxright[lhs, left]: maxright[lhs, left] = right
-	print
+	print >>stderr, ''
 	return chart
 
 def doinsideoutside(list sent, Grammar grammar, inside, outside):
@@ -397,7 +397,7 @@ def insidescores(list sent, Grammar grammar,
 				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
 				if right < minright[lhs, left]: minright[lhs, left] = right
 				if right > maxright[lhs, left]: maxright[lhs, left] = right
-	print
+	print >>stderr, ''
 	return minleft, maxleft, minright, maxright
 
 def outsidescores(Grammar grammar, long start, short lensent,
@@ -446,7 +446,7 @@ def outsidescores(Grammar grammar, long start, short lensent,
 						if rs == 0.0: continue
 						outside[left, split, rule.rhs1] += rule.prob * rs * os
 						outside[split, right, rule.rhs2] += rule.prob * ls * os
-	print
+	print >>stderr, ''
 	return outside
 
 def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
@@ -466,7 +466,11 @@ def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
 
 	expects a mapping which gives a list of consistent rules from the reduction
 	(as Rule objects) given a rule as key (as a tuple of strings); e.g. ('NP',
-	'DT', 'NN') -> [Rule(...), Rule(...), ...]"""
+	'DT', 'NN') -> [Rule(...), Rule(...), ...]
+
+	NB: this algorithm could also be used to determine the probability of
+	derivations, but then the input would have to distinguish whether nodes are
+	internal nodes of fragments, or whether they join two fragments. """
 	neginf = float('-inf')
 	cdef dict chart = {}	#chart[left, right][label]
 	cdef tuple a, b, c
@@ -588,13 +592,15 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 			lexicon, logprob)
 
 def reestimate(Grammar coarse, Grammar fine):
-	""" Modify probabilities of coarse grammar such that the are the sum
+	""" Modify probabilities of coarse grammar such that they are the sum
 	of probabilities of rules in the fine grammar that map to the same
 	nonterminals.  """
+	cdef Rule rule
 	cdef dict lhs = <dict>defaultdict(list)
 	cdef dict rhs = <dict>defaultdict(list)
 	cdef dict mapping = dict((b, coarse.toid[a.rsplit("@", 1)[0]])
-							for a,b in fine.toid.iteritems())
+							for a, b in fine.toid.iteritems())
+	assert fine.logprob
 	for rule in fine.unary:
 		lhs[mapping[rule.lhs]].append(rule.prob)
 		rhs[mapping[rule.lhs], mapping[rule.rhs1]].append(rule.prob)
@@ -604,15 +610,15 @@ def reestimate(Grammar coarse, Grammar fine):
 			rhs[mapping[rule.lhs], mapping[rule.rhs1],
 				mapping[rule.rhs2]].append(rule.prob)
 	for rule in coarse.unary:
-		rule.prob = (logsum(rhs[mapping[rule.lhs], mapping[rule.rhs1]])
-					- logsum(lhs[mapping[rule.lhs]]))
+		rule.prob = logsum(rhs[rule.lhs, rule.rhs1]) - logsum(lhs[rule.lhs])
+		if not coarse.logprob: rule.prob = exp(-rule.prob)
 	for rules in coarse.binary:
 		for rule in rules:
-			rule.prob = (logsum(rhs[mapping[rule.lhs],
-						mapping[rule.rhs1], mapping[rule.rhs2]])
-						- logsum(lhs[mapping[rule.lhs]]))
+			rule.prob = (logsum(rhs[rule.lhs, rule.rhs1, rule.rhs2])
+						- logsum(lhs[rule.lhs]))
+			if not coarse.logprob: rule.prob = exp(-rule.prob)
 
-def logsum(list logprobs):
+cdef inline double logsum(list logprobs) except 1.0:
 	# Adding probabilities in log space
 	# http://blog.smola.org/post/987977550/log-probabilities-semirings-and-floating-point-numbers
 	# https://facwiki.cs.byu.edu/nlp/index.php/Log_Domain_Computations

@@ -1,6 +1,6 @@
 from distutils.core import setup
 from Cython.Build import cythonize
-import os, cython, numpy
+import numpy
 
 # some of these directives increase performance,
 # but at the cost of failing in mysterious ways.
