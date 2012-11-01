@@ -53,19 +53,19 @@ cdef class Edge:
 					self.inside, self.rule, self.split)
 
 cdef class RankedEdge:
-	def __init__(self, head, edge, left, right):
-		self.head = head; self.edge = edge
-		self.left = left; self.right = right
-	#def __cinit__(self, ChartItem head, Edge edge, int j1, int j2):
-	#	self.head = head; self.edge = edge
-	#	self.left = j1; self.right = j2
+	def __init__(self, label, left, right, edge, leftrank, rightrank):
+		self.label = label; self.left = left; self.right = right
+		self.leftrank = leftrank; self.rightrank = rightrank
+		self.edge = edge
 	def __hash__(self):
 		cdef long h
 		#h = hash((head, edge, j1, j2))
-		h = (1000003UL * 0x345678UL) ^ hash(self.head)
+		h = (1000003UL * 0x345678UL) ^ hash(self.label)
 		h = (1000003UL * h) ^ hash(self.edge)
 		h = (1000003UL * h) ^ self.left
 		h = (1000003UL * h) ^ self.right
+		h = (1000003UL * h) ^ self.leftrank
+		h = (1000003UL * h) ^ self.rightrank
 		if h == -1: h = -2
 		return h
 	def __richcmp__(self, RankedEdge other, int op):
@@ -73,24 +73,16 @@ cdef class RankedEdge:
 			return (op == 2) == (
 				self.left == other.left
 				and self.right == other.right
-				and self.head == other.head
+				and self.leftrank == other.leftrank
+				and self.rightrank == other.rightrank
+				and self.label == other.label
 				and self.edge == other.edge)
 		else:
 			raise NotImplemented
 	def __repr__(self):
-		return "RankedEdge(%r, %r, %d, %d)" % (
-					self.head, self.edge, self.left, self.right)
-
-cdef inline RankedEdge new_RankedEdge(ChartItem head, Edge edge, short j1, short j2):
-	cdef RankedEdge rankededge = RankedEdge.__new__(RankedEdge)
-	rankededge.head = head; rankededge.edge = edge;
-	rankededge.left = j1; rankededge.right = j2
-	return rankededge
-
-cdef inline ChartItem new_ChartItem(unsigned int label, short left, short right):
-	cdef ChartItem item = ChartItem.__new__(ChartItem)
-	item.label = label; item.left = left; item.right = right
-	return item
+		return "RankedEdge(%r, %r, %r, %r, %d, %d)" % (
+					self.label, self.left, self.right, self.edge,
+					self.leftrank, self.rightrank)
 
 cdef class Grammar:
 	def __init__(self, lexical, unary, unarybyrhs, binary, tolabel, toid,

@@ -1,12 +1,13 @@
 """ Probabilistic CKY parser for PCFGs """
-import sys, codecs
+import codecs
+from sys import stdout, stderr
 from collections import defaultdict
 from nltk import Tree
 import numpy as np
 
 from agenda cimport EdgeAgenda, Entry
 cimport numpy as np
-from containers cimport Edge, Rule, Terminal, Grammar
+from containers cimport Edge, Rule, Terminal, Grammar, new_Edge
 
 cdef extern from "math.h":
 	bint isinf(double)
@@ -47,7 +48,7 @@ def parse(list sent, Grammar grammar, whitelist):
 		viterbi.fill(np.inf)
 	else: viterbi = whitelist
 	# assign POS tags
-	print 1, # == span
+	print >>stderr, 1, # == span
 	for left in range(lensent):
 		right = left + 1
 		cell = chart[left][right]
@@ -89,8 +90,8 @@ def parse(list sent, Grammar grammar, whitelist):
 				if right > maxright[lhs, left]: maxright[lhs, left] = right
 
 	for span in range(2, lensent + 1):
-		print span,
-		sys.stdout.flush()
+		print >>stderr, span,
+		stdout.flush()
 
 		# loop over all non-pruned indices. this appears to be slow.
 		#labels, leftidx, rightidx = np.isinf(
@@ -104,8 +105,8 @@ def parse(list sent, Grammar grammar, whitelist):
 		#	span = right - left
 		#	if span > prevspan:
 		#		prevspan = span
-		#		print span,
-		#		sys.stdout.flush()
+		#		print >>stderr, span,
+		#		stdout.flush()
 		#	for rule in <list>(grammar.binary[lhs]):
 
 		# constituents from left to right
@@ -197,7 +198,7 @@ def parse_sparse(list sent, Grammar grammar, chart):
 	if chart is None:
 		chart = [[{} for _ in range(lensent)] for _ in range(lensent)]
 	# assign POS tags
-	print 1, # == span
+	print >>stderr, 1, # == span
 	for left in range(lensent):
 		right = left + 1
 		cell = chart[left][right]
@@ -236,8 +237,8 @@ def parse_sparse(list sent, Grammar grammar, chart):
 				if right < minright[lhs, left]: minright[lhs, left] = right
 				if right > maxright[lhs, left]: maxright[lhs, left] = right
 	for span in range(2, lensent + 1):
-		print span,
-		sys.stdout.flush()
+		print >>stderr, span,
+		stdout.flush()
 
 		# constituents from left to right
 		for left in range(0, lensent - span + 1):
@@ -333,7 +334,7 @@ def insidescores(list sent, Grammar grammar,
 	maxright = np.empty_like(minleft); maxright.fill(-1)
 	inside[:lensent, :lensent+1, :] = 0.0
 	assert not grammar.logprob, "Grammar must not have log probabilities."
-	print "inside ",
+	print >>stderr, "inside ",
 	# assign POS tags
 	for left in range(lensent):
 		right = left + 1
@@ -359,8 +360,8 @@ def insidescores(list sent, Grammar grammar,
 				if right < minright[lhs, left]: minright[lhs, left] = right
 				if right > maxright[lhs, left]: maxright[lhs, left] = right
 	for span in range(1, lensent + 1):
-		print span,
-		sys.stdout.flush()
+		print >>stderr, span,
+		stdout.flush()
 		# constituents from left to right
 		for left in range(0, lensent - span + 1):
 			right = left + span
@@ -416,10 +417,10 @@ def outsidescores(Grammar grammar, long start, short lensent,
 	cdef unicode word
 	assert not grammar.logprob, "Grammar must not have log probabilities."
 	outside[0, lensent, start] = 1.0
-	print "outside",
+	print >>stderr, "outside",
 	for span in range(lensent, 0, -1):
-		print span,
-		sys.stdout.flush()
+		print >>stderr, span,
+		stdout.flush()
 		for left in range(1 + lensent - span):
 			if left == lensent: continue
 			right = left + span
@@ -511,14 +512,6 @@ def dopparseprob(tree, Grammar grammar, dict mapping, lexchart):
 		else: raise ValueError("expected binary tree.")
 	return chart.get((grammar.toid[tree.node], 0, len(tree.leaves())), neginf)
 
-# to avoid overhead of __init__ and __cinit__ constructors
-# belongs in containers but putting it here gives
-# a better chance of successful inlining
-cdef inline Edge new_Edge(double inside, Rule rule, short split):
-	cdef Edge edge = Edge.__new__(Edge)
-	edge.inside = inside; edge.rule = rule; edge.split = split
-	return edge
-
 cdef inline short smax(short a, short b): return a if a >= b else b
 cdef inline short smin(short a, short b): return a if a <= b else b
 
@@ -528,8 +521,8 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 	grammar."""
 	nonterminals = set(); unary = []; binary = []; lexical = []
 	lexicon = set()
-	print "reading the grammar...",
-	sys.stdout.flush()
+	print >>stderr, "reading the grammar...",
+	stdout.flush()
 	for a in open(rules):
 		rule = a.rstrip().split()
 		if len(rule) > 4: raise ValueError("rule is not binarized: %s" % rule)
@@ -537,7 +530,7 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 			raise ValueError("malformed rule: %s while reading %s" % (
 				rule, rules))
 		nonterminals.update(rule[1:])
-	print len(nonterminals), "non-terminals"
+	print >>stderr, len(nonterminals), "non-terminals"
 	symbols = ["Epsilon"] + sorted(nonterminals)
 	toid = dict((a, n) for n,a in enumerate(symbols))
 	tolabel = dict(enumerate(symbols))
@@ -557,8 +550,8 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 			rhs2 = toid[rule[3]]
 			binary[lhs].append(Rule(lhs, rhs1, rhs2, freq))
 		fd[lhs] += freq
-	print "reading the lexicon...",
-	sys.stdout.flush()
+	print >>stderr, "reading the lexicon...",
+	stdout.flush()
 	for a in codecs.open(lexiconfile, encoding=encoding):
 		rule = a.split()
 		word = rule[0]
@@ -577,8 +570,8 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 			freq = float(freq)
 			lexical.append(Terminal(lhs, u"", float(freq)))
 			fd[lhs] += freq
-	print "%d words\nparameter estimation..." % (len(lexicon)),
-	sys.stdout.flush()
+	print >>stderr, "%d words\nparameter estimation..." % (len(lexicon)),
+	stdout.flush()
 	if freqs:
 		# turn rule frequencies into relative frequencies
 		if logprob:
@@ -590,7 +583,7 @@ def readbitpargrammar(rules, lexiconfile, unknownwords, logprob=True, freqs=True
 	for a in unary:
 		#prevent cycles
 		if a.prob == 0.0: a.prob = 0.0001
-	print "finished"
+	print >>stderr, "finished"
 	return Grammar(lexical, unary, unarybyrhs, binary, tolabel, toid,
 			lexicon, logprob)
 

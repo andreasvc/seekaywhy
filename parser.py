@@ -1,4 +1,5 @@
-import sys, time, re
+import time, re
+from sys import argv, stdin, stdout, stderr
 from getopt import gnu_getopt
 from operator import itemgetter
 from math import exp, log, isinf
@@ -9,9 +10,7 @@ from cky import parse, parse_sparse, readbitpargrammar, doinsideoutside, \
 	pprint_chart, pprint_matrix, dopparseprob, getgrammarmapping, \
 	cachingdopparseprob, doplexprobs
 from kbest import lazykbest
-from containers import ChartItem
-from coarsetofine import whitelistfromkbest, whitelistfromposteriors, \
-	whitelistfromposteriors2
+from coarsetofine import whitelistfromkbest, whitelistfromposteriors2
 from disambiguation import marginalize
 removeids = re.compile("@[0-9_]+")
 
@@ -30,16 +29,14 @@ Options:
 --threshold p   in coarse-to-fine mode, the posterior threshold (as log prob)
 --rerank k      enable DOP reranking mode: find DOP parse probabilities
                 for k coarse derivations.
-""" % (sys.argv[0], sys.argv[0])
-#TODO:
-#--quiet         produce no output except parses
-#--kbestctf k    use k-best coarse-to-fine; instead of posterior threshold,
-#                use k-best derivations as threshold
+--kbestctf k    use k-best coarse-to-fine; instead of posterior threshold,
+                use k-best derivations as threshold
+""" % (argv[0], argv[0])
 
 def main():
-	print "SeeKayWhy PCFG parser - Andreas van Cranenburgh"
-	options = ("quiet", "prob", "rerank=", "threshold=", "kbestctf=")
-	opts, args = gnu_getopt(sys.argv[1:], "u:b:", options)
+	print >>stderr, "SeeKayWhy PCFG parser - Andreas van Cranenburgh"
+	options = ("prob", "rerank=", "threshold=", "kbestctf=")
+	opts, args = gnu_getopt(argv[1:], "u:b:", options)
 	opts = dict(opts)
 	unknownwords = opts.get("-u")
 	k = opts.get("-b", 1)
@@ -57,7 +54,8 @@ def main():
 
 def simple(args, unknownwords, k, printprob):
 	grammar = readbitpargrammar(args[0], args[1], unknownwords)
-	input = sys.stdin; out = sys.stdout
+	start = grammar.toid["TOP"]
+	input = stdin; out = stdout
 	if len(args) >= 3: input = open(args[2])
 	if len(args) == 4: out = open(args[3], "w")
 	times = [time.clock()]
@@ -67,13 +65,12 @@ def simple(args, unknownwords, k, printprob):
 		for word in sent:
 			assert word in grammar.lexicon or unknownwords, (
 				"unknown word %r and no open class tags supplied" % word)
-		print "parsing:", n, " ".join(sent),
-		sys.stdout.flush()
+		print >>stderr, "parsing:", n, " ".join(sent),
+		stdout.flush()
 		chart, viterbi = parse(sent, grammar, None)
-		start = ChartItem(grammar.toid["TOP"], 0, len(sent))
 		#pprint_chart(chart, sent, grammar.tolabel)
 		if chart[0][len(sent)].get(grammar.toid["TOP"]):
-			parsetrees = lazykbest(chart, start, k, grammar.tolabel, sent)
+			parsetrees = lazykbest(chart, start, 0, len(sent), k, grammar.tolabel)
 			assert len(parsetrees) == len(set(parsetrees))
 			assert len(parsetrees) == len(set(tree for tree, prob in parsetrees))
 			if printprob:
@@ -86,24 +83,24 @@ def simple(args, unknownwords, k, printprob):
 		#out.write("\n")
 		out.flush()
 		times.append(time.clock())
-		print times[-1] - times[-2], "s"
-	print "raw cpu time", time.clock() - times[0]
+		print >>stderr, times[-1] - times[-2], "s"
+	print >>stderr, "raw cpu time", time.clock() - times[0]
 	times = [a - b for a, b in zip(times[1::2], times[::2])]
-	print "average time per sentence", sum(times) / len(times)
-	print "finished"
+	print >>stderr, "average time per sentence", sum(times) / len(times)
+	print >>stderr, "finished"
 	out.close()
 
 def ctf(args, unknownwords, k, printprob, threshold, posterior=True, mpd=False):
 	m = 10000
 	derivthreshold = 1000	# kbest derivations to prune with
 	if posterior: threshold = exp(threshold)
-	maxlen = 65
+	maxlen = 999 #65
 	unparsed = 0
 	coarse = readbitpargrammar(args[0], args[1], unknownwords, logprob=not posterior)
 	fine = readbitpargrammar(args[2], args[3], unknownwords, freqs=False)
 	for a in fine.toid:
 		assert a.rsplit("@", 1)[0] in coarse.toid, "%s not in coarse grammar" % a
-	input = sys.stdin; out = sys.stdout
+	input = stdin; out = stdout
 	if len(args) >= 5: input = open(args[4])
 	if len(args) == 6: out = open(args[5], "w")
 	times = [time.clock()]
@@ -125,8 +122,7 @@ def ctf(args, unknownwords, k, printprob, threshold, posterior=True, mpd=False):
 			assert unknownwords or (
 				word in coarse.lexicon and word in fine.lexicon), (
 				"unknown word and no open class tags supplied")
-		print "parsing:", n, " ".join(sent)
-		start = ChartItem(coarse.toid["TOP"], 0, len(sent))
+		print >>stderr, "parsing:", n, " ".join(sent)
 		if posterior:
 			inside, outside = doinsideoutside(sent, coarse, inside, outside)
 			#print "inside"; pprint_matrix(inside, sent, coarse.tolabel)
@@ -137,17 +133,18 @@ def ctf(args, unknownwords, k, printprob, threshold, posterior=True, mpd=False):
 		if posterior: goalitem = inside[0, len(sent), coarse.toid["TOP"]]
 		else: goalitem = chart[0][len(sent)].get(coarse.toid["TOP"])
 		if goalitem:
-			print "pruning ...",
-			sys.stdout.flush()
+			print >>stderr, "pruning ...",
+			stdout.flush()
+			start = coarse.toid["TOP"]
 			if posterior:
 				finechart = whitelistfromposteriors2(inside, outside, start,
-					coarse, fine, mapping, maxlen, threshold)
+					len(sent), coarse, fine, mapping, threshold)
 			else:
-				whitelistfromkbest(chart, start, coarse, fine, threshold,
-					finechart, maxlen)
+				finechart = whitelistfromkbest(chart, start, len(sent),
+					coarse, fine, threshold, mapping)
 			#chart, finechart = parse(sent, fine, finechart)
 			chart = parse_sparse(sent, fine, finechart)
-			start = ChartItem(fine.toid["TOP"], 0, len(sent))
+			start = fine.toid["TOP"]
 
 			try:
 				assert chart[0][len(sent)][fine.toid["TOP"]], (
@@ -167,17 +164,17 @@ def ctf(args, unknownwords, k, printprob, threshold, posterior=True, mpd=False):
 				out.writelines("%s\n" % tree for tree in results)
 		else:
 			unparsed += 1
-			print "No parse"
+			print >>stderr, "No parse"
 			out.write("No parse for \"%s\"\n" % " ".join(sent))
 		out.write("\n")
 		times.append(time.clock())
-		print times[-1] - times[-2], "s"
+		print >>stderr, times[-1] - times[-2], "s"
 		out.flush()
-	print "raw cpu time", time.clock() - times[0]
+	print >>stderr, "raw cpu time", time.clock() - times[0]
 	times = [a - b for a, b in zip(times[1::2], times[::2])]
-	print "average time per sentence", sum(times) / len(times)
-	print "unparsed sentences:", unparsed
-	print "finished"
+	print >>stderr, "average time per sentence", sum(times) / len(times)
+	print >>stderr, "unparsed sentences:", unparsed
+	print >>stderr, "finished"
 	out.close()
 
 def rerank(args, unknownwords, printk, printprob, k):
@@ -185,12 +182,13 @@ def rerank(args, unknownwords, printk, printprob, k):
 	unparsed = 0
 	coarse = readbitpargrammar(args[0], args[1], unknownwords, logprob=True)
 	fine = readbitpargrammar(args[2], args[3], unknownwords, freqs=False, logprob=True)
+	start = coarse.toid["TOP"]
 	for a in fine.toid:
 		assert a.rsplit("@", 1)[0] in coarse.toid, "%s not in coarse grammar" % a
 	if len(args) >= 5: input = open(args[4])
-	else: input = sys.stdin
+	else: input = stdin
 	if len(args) == 6: out = open(args[5], "w")
-	else: out = sys.stdout
+	else: out = stdout
 	times = [time.clock()]
 	mapping = getgrammarmapping(coarse, fine)
 	for n, a in enumerate(input.read().split("\n\n")):
@@ -201,18 +199,17 @@ def rerank(args, unknownwords, printk, printprob, k):
 			assert unknownwords or (
 				word in coarse.lexicon and word in fine.lexicon), (
 				"unknown word and no open class tags supplied")
-		print "parsing:", n, " ".join(sent)
-		start = ChartItem(coarse.toid["TOP"], 0, len(sent))
+		print >>stderr, "parsing:", n, " ".join(sent)
 		chart, _ = parse(sent, coarse, None); print
 		if chart[0][len(sent)].get(coarse.toid["TOP"]):
 			trees = []
-			candidates = lazykbest(chart, start, k, coarse.tolabel, sent)
+			candidates = lazykbest(chart, start, 0, len(sent), k, coarse.tolabel)
 			lexchart = doplexprobs(Tree(candidates[0][0]), fine)
 			for m, (tree, prob) in enumerate(candidates):
 				trees.append((dopparseprob(Tree(tree),
 						fine, mapping, lexchart), tree))
-				print m, exp(-prob), exp(trees[-1][0])
-				sys.stdout.flush()
+				print >>stderr, m, exp(-prob), exp(trees[-1][0])
+				stdout.flush()
 			results = nlargest(printk, trees)
 			# print k-best parsetrees
 			if printprob:
@@ -222,17 +219,17 @@ def rerank(args, unknownwords, printk, printprob, k):
 				out.writelines("%s\n" % tree for _, tree in results)
 		else:
 			unparsed += 1
-			print "No parse"
+			print >>stderr, "No parse"
 			out.write("No parse for \"%s\"\n" % " ".join(sent))
 		out.write("\n")
 		times.append(time.clock())
-		print times[-1] - times[-2], "s"
+		print >>stderr, times[-1] - times[-2], "s"
 		out.flush()
-	print "raw cpu time", time.clock() - times[0]
+	print >>stderr, "raw cpu time", time.clock() - times[0]
 	times = [a - b for a, b in zip(times[1::2], times[::2])]
-	print "average time per sentence", sum(times) / len(times)
-	print "unparsed sentences:", unparsed
-	print "finished"
+	print >>stderr, "average time per sentence", sum(times) / len(times)
+	print >>stderr, "unparsed sentences:", unparsed
+	print >>stderr, "finished"
 	out.close()
 
 def nonterminalmapping(coarse, fine):

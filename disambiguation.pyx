@@ -6,7 +6,7 @@ from bisect import bisect_right
 from collections import defaultdict
 from operator import itemgetter
 from nltk import Tree
-from kbest import lazykbest, lazykthbest
+from kbest import lazykbest
 
 from containers cimport ChartItem, Edge
 
@@ -18,7 +18,7 @@ def sldop_simple(chart, start, sent, dopgrammar, m, sldop_n):
 	number of addressed nodes in the k-best derivations. After selecting the n
 	best parse trees, the one with the shortest derivation is returned."""
 	# get n most likely derivations
-	derivations = lazykbest(chart, start, m, dopgrammar.tolabel, sent)
+	derivations = lazykbest(chart, start, 0, len(sent), m, dopgrammar.tolabel)
 	x = len(derivations); derivations = set(derivations)
 	xx = len(derivations); derivations = dict(derivations)
 	if xx != len(derivations):
@@ -48,21 +48,21 @@ cdef inline double sumderivs(ts, derivations):
 cdef inline int minunaddressed(tt, idsremoved):
 	return min([(t.count("(") - t.count("@")) for t in idsremoved[tt]])
 
-def samplechart(dict chart, ChartItem start, dict tolabel, dict tables):
+def samplechart(dict chart, ChartItem goal, dict tolabel, dict tables):
 	""" Samples a derivation from a chart. """
 	cdef Edge edge
 	cdef ChartItem child
 	#NB: this does not sample properly, as it ignores the distribution of
 	#probabilities and samples uniformly instead. 
-	#edge = choice(chart[start])
-	rnd = random() * tables[start][-1]
-	idx = bisect_right(tables[start], rnd)
-	edge = chart[start][idx]
+	#edge = choice(chart[goal])
+	rnd = random() * tables[goal][-1]
+	idx = bisect_right(tables[goal], rnd)
+	edge = chart[goal][idx]
 	if edge.left.label == 0: # == "Epsilon":
-		return "(%s %d)" % (tolabel[start.label], edge.left.vec), edge.prob
+		return "(%s %d)" % (tolabel[goal.label], edge.left.vec), edge.prob
 	children = [samplechart(chart, child, tolabel, tables)
 				for child in (edge.left, edge.right) if child.label]
-	tree = "(%s %s)" % (tolabel[start.label],
+	tree = "(%s %s)" % (tolabel[goal.label],
 							" ".join([a for a,b in children]))
 	return tree, edge.prob + sum([b for a,b in children])
 
@@ -72,7 +72,7 @@ def samplechart(dict chart, ChartItem start, dict tolabel, dict tables):
 	#					log(fsum([exp(edge.prob - minprob)
 	#								for edge in edges]))]))
 
-def getsamples(chart, start, n, tolabel):
+def getsamples(chart, goal, n, tolabel):
 	tables = {}
 	for item in chart:
 		chart[item].sort(key=lambda edge: edge.prob)
@@ -82,23 +82,23 @@ def getsamples(chart, start, n, tolabel):
 			#prev += exp(-edge.prob); tables[item].append(prev)
 			prev += exp(-minprob - edge.prob)
 			tables[item].append(exp(minprob + log(prev)))
-	derivations = set([samplechart(chart, start, tolabel, tables)
+	derivations = set([samplechart(chart, goal, tolabel, tables)
 						for x in range(n)])
 	derivations.discard(None)
 	return derivations
 
-def viterbiderivation(chart, start, tolabel):
-	cdef Edge edge = <Edge>min(chart[start])
-	return getviterbi(chart, start, tolabel), edge.inside
+def viterbiderivation(chart, goal, tolabel):
+	cdef Edge edge = <Edge>min(chart[goal])
+	return getviterbi(chart, goal, tolabel), edge.inside
 
-cdef getviterbi(chart, ChartItem start, tolabel):
-	cdef Edge edge = min(chart[start])
+cdef getviterbi(chart, ChartItem goal, tolabel):
+	cdef Edge edge = min(chart[goal])
 	if edge.right.label: #binary
-		return "(%s %s %s)" % (tolabel[start.label],
+		return "(%s %s %s)" % (tolabel[goal.label],
 					getviterbi(chart, edge.left, tolabel),
 					getviterbi(chart, edge.right, tolabel))
 	else: #unary or terminal
-		return "(%s %s)" % (tolabel[start.label],
+		return "(%s %s)" % (tolabel[goal.label],
 					getviterbi(chart, edge.left, tolabel) if edge.left.label
 									else str(edge.left.vec))
 
@@ -114,9 +114,9 @@ def marginalize(chart, start, tolabel, sent, n=10, sample=False, both=False, sho
 	derivations = set()
 	if sample or both:
 		raise NotImplemented
-		#derivations = getsamples(chart, start, n, tolabel)
+		#derivations = getsamples(chart, goal, n, tolabel)
 	if not sample or both:
-		derivations.update(lazykbest(chart, start, n, tolabel, sent))
+		derivations.update(lazykbest(chart, start, 0, len(sent), n, tolabel))
 	if shortest:
 		raise NotImplemented
 		#maxprob = min(derivations, key=itemgetter(1))[1]
@@ -154,7 +154,7 @@ def marginalize(chart, start, tolabel, sent, n=10, sample=False, both=False, sho
 	logging.debug("(%d derivations, %d parsetrees)" % (m, len(parsetrees)))
 	return parsetrees
 
-#def sldop(chart, start, sent, tags, dopgrammar, secondarymodel, m, sldop_n, sample=False, both=False):
+#def sldop(chart, goal, sent, tags, dopgrammar, secondarymodel, m, sldop_n, sample=False, both=False):
 #	""" `proper' method for sl-dop. parses sentence once more to find shortest
 #	derivations, pruning away any chart item not occurring in the n most
 #	probable parse trees. Returns the first result of the intersection of the
@@ -164,9 +164,9 @@ def marginalize(chart, start, tolabel, sent, n=10, sample=False, both=False, sho
 #	# get n most likely derivations
 #	derivations = set()
 #	if sample:
-#		derivations = getsamples(chart, start, 10*m, dopgrammar.tolabel)
+#		derivations = getsamples(chart, goal, 10*m, dopgrammar.tolabel)
 #	if not sample or both:
-#		derivations.update(lazykbest(chart, start, m, dopgrammar.tolabel, sent))
+#		derivations.update(lazykbest(chart, goal, m, dopgrammar.tolabel))
 #	derivations = dict(derivations)
 #	# sum over Goodman derivations to get parse trees
 #	idsremoved = defaultdict(set)
@@ -192,7 +192,7 @@ def marginalize(chart, start, tolabel, sent, n=10, sample=False, both=False, sho
 #	chart2, start2 = parse(words, secondarymodel, tagsornil,
 #					1, #secondarymodel.toid[top],
 #					True, None, prunelist=prunelist)
-#	if start2: shortestderivations = lazykbest(chart2, start2, m, secondarymodel.tolabel, sent)
+#	if start2: shortestderivations = lazykbest(chart2, start2, m, secondarymodel.tolabel)
 #	else:
 #		shortestderivations = []
 #		logging.warning("shortest derivation parsing failed") # error?

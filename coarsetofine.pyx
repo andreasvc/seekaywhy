@@ -2,13 +2,14 @@
 items for a fine grammar.
 """
 import re, logging
+from sys import stderr
 from collections import defaultdict
 from math import exp, log
 import numpy as np
 from nltk import Tree
 from agenda import Agenda
 from containers import ChartItem, Edge, RankedEdge
-from kbest import lazykthbest, lazykbest
+from kbest import lazykthbest
 
 cimport cython
 cimport numpy as np
@@ -24,27 +25,26 @@ reducemarkov = [re.compile("\|<[^>]*>"),
 				re.compile("\|<([^->]*-[^->]*-[^->]*)-?[^>]*>")]
 
 def whitelistfromposteriors2(np.ndarray[np.double_t, ndim=3] inside,
-	np.ndarray[np.double_t, ndim=3] outside, ChartItem goal, Grammar coarse,
-	Grammar fine, dict mapping, short maxlen, double threshold):
+	np.ndarray[np.double_t, ndim=3] outside, start, lensent, Grammar coarse,
+	Grammar fine, dict mapping, double threshold):
 	""" compute posterior probabilities and prune away cells below some
 	threshold. this version is for use with parse_sparse(). """
 	cdef long label
-	cdef short lensent = goal.right
-	sentprob = inside[0, lensent, goal.label]
-	print "sentprob=%g" % sentprob,
+	sentprob = inside[0, lensent, start]
+	print >>stderr, "sentprob=%g" % sentprob,
 	posterior = (inside[:lensent, :lensent+1]
 		* outside[:lensent, :lensent+1]) / sentprob
 
-	print " ", (posterior > threshold).sum(),
-	print "of", (posterior != 0.0).sum(),
-	print "nonzero coarse items left"
-	finechart = [[{} for _ in range(maxlen)] for _ in range(maxlen)]
+	print >>stderr, " ", (posterior > threshold).sum(),
+	print >>stderr, "of", (posterior != 0.0).sum(),
+	print >>stderr, "nonzero coarse items left"
+	finechart = [[{} for _ in range(lensent+1)] for _ in range(lensent)]
 	leftidx, rightidx, labels = (posterior[:lensent, :lensent+1]
 		> threshold).nonzero()
 	#labels, leftidx, rightidx = (posterior[:,:lensent,:lensent+1] > threshold).nonzero()
 	for label, left, right in zip(labels, leftidx, rightidx):
 		finechart[left][right].update((lhs, []) for lhs in mapping[label])
-	print "copied chart."
+	print >>stderr, "copied chart."
 	return finechart
 
 def whitelistfromposteriors(np.ndarray[np.double_t, ndim=3] inside,
@@ -57,14 +57,14 @@ def whitelistfromposteriors(np.ndarray[np.double_t, ndim=3] inside,
 	cdef long label
 	cdef short lensent = goal.right
 	sentprob = inside[0, lensent, goal.label]
-	print "sentprob=%g" % sentprob
+	print >>stderr, "sentprob=%g" % sentprob
 	posterior = (inside[:lensent, :lensent+1, :]
 			* outside[:lensent, :lensent+1, :]) / sentprob
 	inside[:lensent, :lensent + 1, :] = np.NAN
 	inside[posterior > threshold] = np.inf
-	print " ", (posterior > threshold).sum(),
-	print "of", (posterior != 0.0).sum(),
-	print "nonzero coarse items left",
+	print >>stderr, " ", (posterior > threshold).sum(),
+	print >>stderr, "of", (posterior != 0.0).sum(),
+	print >>stderr, "nonzero coarse items left",
 	#labels, leftidx, rightidx = (posterior[:lensent, :lensent+1, :]
 	#	> threshold).nonzero()
 	#for left, right, label in zip(leftidx, rightidx, labels):
@@ -73,7 +73,7 @@ def whitelistfromposteriors(np.ndarray[np.double_t, ndim=3] inside,
 	for label in range(len(fine.toid)):
 		finechart[:lensent, :lensent+1, label] = inside[:lensent,:lensent+1,
 			coarse.toid[removeids.sub("", fine.tolabel[label])]]
-	print "copied chart."
+	print >>stderr, "copied chart."
 
 cpdef whitelistfromposteriors1(
 	dict chart,
@@ -95,95 +95,83 @@ cpdef whitelistfromposteriors1(
 	posterior = inside * outside / sentprob
 	viterbi.fill(np.inf)
 	viterbi[posterior < threshold] = np.NAN
-	print (posterior >= threshold).sum(), "coarse items left",
+	print >>stderr, (posterior >= threshold).sum(), "coarse items left",
 	for label, id in fine.toid.iteritems():
 		whitelist[id] = viterbi[:, :, coarse.toid[removeids.sub("", label)]]
 
-def whitelistfromkbest(dict chart, ChartItem goal,
-	Grammar coarse, Grammar fine, int k,
-	np.ndarray[np.double_t, ndim=3] whitelist, int maxlen):
+def whitelistfromkbest(list chart, start, lensent,
+	Grammar coarse, Grammar fine, int k, dict mapping):
 	""" Produce a white list of chart items occurring in the k-best derivations
 	of chart, where labels X in the coarse grammar are projected to the labels
 	X and X@n in 'toid', for possible values of n.  When k==0, the chart is
 	merely filtered to contain only items that contribute to a complete
 	derivation."""
-	cdef ChartItem Ih
-	#l = [{} for a in coarse.toid]
-	#for a, label in fine.toid.iteritems():
-	#	for left, right in l[coarse.toid.get(removeids.sub("", a), 1)]:
-	#		whitelist[left, right, label] = np.inf
-	cdef np.ndarray[np.double_t, ndim=3] l = np.empty(
-		(len(coarse.toid), maxlen, (maxlen+1)), dtype='d')
-	l.fill(np.NAN)
-	# construct a table mapping each nonterminal A or A@x
-	# to the outside score for A in the chart to prune with
-	kbest = kbest_outside(chart, goal, k)
-	# uses ids of labels in coarse chart
-	for Ih in kbest:
-		l[(<ChartItem>Ih).label, (<ChartItem>Ih).left,
-			(<ChartItem>Ih).right] = np.inf #kbest[Ih]
-	print (l == np.inf).sum(), #"of", len(chart), 
-	print "coarse items left"
-	for a, label in fine.toid.iteritems():
-		whitelist[label] = l[coarse.toid[removeids.sub("", a)]]
-	#logging.debug('pruning with %d nonterminals, %d items' % (
-	#	len(filter(None, whitelist)), len(kbest)))
-
-cdef dict kbest_outside(dict chart, ChartItem start, int k):
-	""" produce a dictionary of ChartItems with the best outside score
-	according to the k-best derivations in a chart. """
 	cdef Entry entry
 	cdef Edge edge
-	cdef dict D = {}, outside = { start : 0.0 }
+	cdef list D, kbestspans = [[{} for _ in range(lensent+1)]
+			for _ in range(lensent)]
+	kbestspans[0][lensent][start] = 0.0
 	if k == 0:
-		outside = filterchart(chart, start)
-		for a in outside:
-			# use if probabilities matter
-			#e = min(outside[a])
-			#outside[a] = e.inside
-			outside[a] = 0.0
+		raise NotImplemented
+		#kbestspans = filterchart(chart, goal)
+		#for a in kbestspans:
+		#	# use if probabilities matter
+		#	#e = min(kbestspans[a])
+		#	#kbestspans[a] = e.inside
+		#	kbestspans[a] = 0.0
 	else:
-		lazykthbest(start, k, k, D, {}, chart, set())
-		for entry in D[start]:
-			getitems(entry.key, entry.value, D, chart, outside)
-	return outside
+		cand = [[{} for _ in x] for x in chart]
+		D = [[{} for _ in x] for x in chart]
+		lazykthbest(start, 0, lensent, k, k, D, cand, chart, set())
+		for entry in D[0][lensent][start]:
+			getitems(entry.key, entry.value, D, chart, kbestspans)
 
-cdef void getitems(RankedEdge ej, double rootprob, dict D,
-		dict chart, dict outside):
+	print >>stderr, ''
+	#print >>stderr, (kbestspans == np.inf).sum(), #"of", len(chart), 
+	#print >>stderr, "coarse items left"
+	finechart = [[{} for _ in range(lensent+1)] for _ in range(lensent)]
+	for left in range(lensent):
+		for right in range(left + 1, lensent+1):
+			for label in kbestspans[left][right]:
+				finechart[left][right].update((finelabel, [])
+					for finelabel in mapping[label])
+	#logging.debug('pruning with %d nonterminals, %d items' % (
+	#	len(filter(None, whitelist)), len(kbest)))
+	return finechart
+
+cdef void getitems(RankedEdge ej, double rootprob, list D,
+		list chart, list items):
 	""" Traverse a derivation e,j, noting outside costs relative to its root
 	edge """
 	cdef Edge e
 	cdef Entry entry
-	cdef ChartItem, eleft, eright
 	cdef RankedEdge eejj
 	cdef double prob
 	e = ej.edge
-	eleft = new_ChartItem(e.rule.rhs1, ej.head.left, e.split)
-	if chart[ej.head.left][e.split].get(e.rule.rhs1):
-		if eleft in D:
-			entry = D[eleft][ej.left]
+	if chart[ej.left][e.split].get(e.rule.rhs1):
+		if e.rule.rhs1 in D[ej.left][e.split]:
+			entry = D[ej.left][e.split][e.rule.rhs1][ej.leftrank]
 			eejj = entry.key; prob = entry.value
 		elif ej.left == 0:
-			eejj = RankedEdge(eleft,
-				chart[ej.head.left][e.split][e.rule.rhs1][0], 0, 0)
+			eejj = RankedEdge(e.rule.rhs1, ej.left, e.split,
+				chart[ej.left][e.split][e.rule.rhs1][0], 0, 0)
 			prob = eejj.edge.inside
 		else: raise ValueError
-		if eleft not in outside:
-			outside[eleft] = rootprob - prob
-		getitems(eejj, rootprob, D, chart, outside)
+		if e.rule.rhs1 not in items[ej.left][e.split]:
+			items[ej.left][e.split][e.rule.rhs1] = rootprob - prob
+		getitems(eejj, rootprob, D, chart, items)
 	if e.rule.rhs2:
-		eright = new_ChartItem(e.rule.rhs2, e.split, ej.head.right)
-		if eright in D:
-			entry = D[eright][ej.right]
+		if e.rule.rhs2 in D[e.split][ej.right]:
+			entry = D[e.split][ej.right][e.rule.rhs2][ej.rightrank]
 			eejj = entry.key; prob = entry.value
-		elif ej.right == 0:
-			eejj = RankedEdge(eright,
-				chart[e.split][ej.head.right][e.rule.rhs2][0], 0, 0)
+		elif ej.rightrank == 0:
+			eejj = RankedEdge(e.rule.rhs2, e.split, ej.right,
+				chart[e.split][ej.right][e.rule.rhs2][0], 0, 0)
 			prob = eejj.edge.inside
 		else: raise ValueError
-		if eright not in outside:
-			outside[eright] = rootprob - prob
-		getitems(eejj, rootprob, D, chart, outside)
+		if e.rule.rhs2 not in items[e.split][ej.right]:
+			items[e.split][ej.right][e.rule.rhs2] = rootprob - prob
+		getitems(eejj, rootprob, D, chart, items)
 
 def filterchart(chart, start):
 	""" remove all entries that do not contribute to a complete derivation

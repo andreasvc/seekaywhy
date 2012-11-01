@@ -1,17 +1,31 @@
-""" Implementation of Huang & Chiang (2005): Better k-best parsing
-"""
+""" Implementation of Huang & Chiang (2005): Better k-best parsing. """
 import logging
-from math import exp, fsum
-from agenda import Agenda, Entry
-from containers import ChartItem, Edge, RankedEdge
+from math import exp
+from agenda import Agenda
+from containers import Edge, RankedEdge
 from operator import itemgetter
 
 from agenda cimport Entry, Agenda, nsmallest
-from containers cimport ChartItem, Edge, RankedEdge, new_RankedEdge
-cdef double infinity = float('infinity')
+from containers cimport Edge, RankedEdge
+
 cdef tuple unarybest = (0, ), binarybest = (0, 0)
 
-cdef inline getcandidates(list chart, ChartItem v, int k):
+cpdef list lazykbest(list chart, unsigned int start, short left, short right,
+		int k, dict tolabel):
+	""" wrapper function to run lazykthbest and get derivations. """
+	cdef Entry entry
+	cdef double prob
+	cdef list D = [[{} for _ in x] for x in chart]
+	cdef list cand = [[{} for _ in x] for x in chart]
+	cdef set explored = set()
+	lazykthbest(start, left, right, k, k, D, cand, chart, explored)
+	logging.debug("%d (sub)derivations considered", len(explored))
+	return filter(itemgetter(0), [
+		(getderivation(entry.key, D, chart, tolabel, 0, None), entry.value)
+		for entry in D[left][right][start]])
+
+cdef inline getcandidates(list chart, unsigned int label,
+		short start, short end, int k):
 	""" Return a heap with up to k candidate arcs starting from vertex v """
 	# NB: the priority queue should either do a stable sort, or should
 	# sort on rank vector as well to have ties resolved in FIFO order;
@@ -21,158 +35,150 @@ cdef inline getcandidates(list chart, ChartItem v, int k):
 	# Otherwise (1, 1) ends up in D[v] after which (0. 1) generates it
 	# as a neighbor and puts it in cand[v] for a second time.
 	cdef Edge edge
-	if not chart[v.left][v.right].get(v.label):
-		#shouldn't raise error because terminals should end here
-		#raise ValueError("%r not in chart" % v)
-		return Agenda()
+	if label not in chart[start][end]: return Agenda()
+	cell = chart[start][end][label]
 	return Agenda(
-		[(RankedEdge(v, edge, 0, 0 if edge.rule.rhs2 else -1), edge.inside)
-					for edge in nsmallest(k, chart[v.left][v.right][v.label])])
+		[(RankedEdge(label, start, end, edge, 0, 0 if edge.rule is not None
+						and edge.rule.rhs2 else -1), edge.inside)
+						for edge in nsmallest(k, cell)])
 
-cpdef inline lazykthbest(ChartItem v, int k, int k1, dict D, dict cand,
-	list chart, set explored):
-	cdef RankedEdge ej
+cpdef inline lazykthbest(unsigned int label, short start, short end,
+		int k, int k1, list D, list cand, list chart, set explored):
 	cdef Entry entry
+	cdef RankedEdge ej
 	# k1 is the global k
-	## first visit of vertex v?
-	# initialize the heap
-	if v not in cand:
-		cand[v] = getcandidates(chart, v, k1)
-	if v not in D: D[v] = []
-	while len(D[v]) < k:
-		if D[v]:
+	# first visit of vertex v?
+	try:
+		if label not in cand[start][end]:
+			# initialize the heap
+			cand[start][end][label] = getcandidates(chart, label, start, end, k1)
+	except IndexError:
+		print label, start, end
+		print cand
+		print len(cand)
+		print len(cand[0])
+		print len(cand[0][1])
+		raise
+	while label not in D[start][end] or len(D[start][end][label]) < k:
+		if label in D[start][end]:
 			# last derivation
-			ej = D[v][-1].key
+			entry = D[start][end][label][-1]
+			ej = entry.key
 			# update the heap, adding the successors of last derivation
 			lazynext(ej, k1, D, cand, chart, explored)
 		# get the next best derivation and delete it from the heap
-		if cand[v]:
-			D[v].append(cand[v].popentry())
+		if cand[start][end][label]:
+			D[start][end].setdefault(label, []).append(
+				cand[start][end][label].popentry())
 		else: break
 	return D
 
-cdef inline lazynext(RankedEdge ej, int k1, dict D, dict cand,
-	list chart, set explored):
+cdef inline lazynext(RankedEdge ej, int k1, list D, list cand, list chart,
+		set explored):
 	cdef RankedEdge ej1
+	cdef Edge ec = ej.edge
 	cdef double prob
+	cdef unsigned int label
+	cdef short start, end
 	# add the |e| neighbors
-	for i in range(2):
-		if i == 0:
-			ei = ChartItem(ej.edge.rule.rhs1, ej.head.left, ej.edge.split)
-			ej1 = RankedEdge(ej.head, ej.edge, ej.left + 1, ej.right)
-		elif i == 1 and ej.right >= 0: #edge.right.label:
-			ei = ChartItem(ej.edge.rule.rhs2, ej.edge.split, ej.head.right)
-			ej1 = RankedEdge(ej.head, ej.edge, ej.left, ej.right + 1)
-		else: break
-		# recursively solve a subproblem
-		# NB: increment j1[i] again because j is zero-based and k is not
-		lazykthbest(ei, (ej1.right if i else ej1.left) + 1, k1,
-							D, cand, chart, explored)
-		# if it exists and is not in heap yet
-		if ((ei in D and (ej1.right if i else ej1.left) < len(D[ei]))
-			and ej1 not in explored): #cand[ej1.head]): <= gives duplicates
-			prob = getprob(chart, D, ej1)
-			# add it to the heap
-			cand[ej1.head][ej1] = prob
-			explored.add(ej1)
+	# left child
+	label = ec.rule.rhs1; start = ej.left; end = ec.split
+	ej1 = RankedEdge(ej.label, ej.left, ej.right, ej.edge,
+			ej.leftrank + 1, ej.rightrank)
+	# recursively solve a subproblem
+	# NB: increment j1[i] again because j is zero-based and k is not
+	lazykthbest(label, start, end, ej1.leftrank + 1, k1, D, cand, chart, explored)
+	# if it exists and is not in heap yet
+	if ((label in D[start][end] and ej1.leftrank < len(D[start][end][label]))
+		and ej1 not in explored): #cand[ej1.head]): <= gives duplicates
+		prob = getprob(chart, D, ej1)
+		# add it to the heap
+		cand[ej1.left][ej1.right][ej1.label][ej1] = prob
+		explored.add(ej1)
+	# right child?
+	if ej.rightrank == -1: return
+	label = ec.rule.rhs2; start = ec.split; end = ej.right
+	ej1 = RankedEdge(ej.label, ej.left, ej.right, ej.edge,
+			ej.leftrank, ej.rightrank + 1)
+	lazykthbest(label, start, end, ej1.rightrank + 1, k1,
+						D, cand, chart, explored)
+	# if it exists and is not in heap yet
+	if ((label in D[start][end] and ej1.rightrank < len(D[start][end][label]))
+		and ej1 not in explored): #cand[ej1.head]): <= gives duplicates
+		prob = getprob(chart, D, ej1)
+		# add it to the heap
+		cand[ej1.left][ej1.right][ej1.label][ej1] = prob
+		explored.add(ej1)
 
-cdef inline double getprob(list chart, dict D, RankedEdge ej) except -1:
-	cdef double result, prob
-	cdef int i
+cdef inline double getprob(list chart, list D, RankedEdge ej) except -1.0:
+	cdef Edge ec, edge
 	cdef Entry entry
-	cdef Edge e = ej.edge
-	cdef ChartItem eright, eleft = ChartItem(e.rule.rhs1, ej.head.left, e.split)
-	if eleft in D: # and ej.left < len(D[eleft]):
-		entry = D[eleft][ej.left]; prob = entry.value
-	elif ej.left == 0:
-		if chart[eleft.left][eleft.right].get(eleft.label):
-			edge = chart[ej.head.left][e.split][e.rule.rhs1][0]
+	cdef double result, prob
+	ec = ej.edge
+	label = ec.rule.rhs1; start = ej.left; end = ec.split
+	if label in D[start][end]:
+		entry = D[start][end][label][ej.leftrank]
+		prob = entry.value
+	elif ej.leftrank == 0: edge = chart[start][end][label][0]; prob = edge.inside
+	else: raise ValueError(
+		"non-zero rank vector not part of explored derivations")
+	# NB: edge.inside if preterminal, 0.0 for terminal
+	result = ec.rule.prob + prob
+	if ej.rightrank >= 0: #if e.right.label:
+		label = ec.rule.rhs2
+		start = ec.split; end = ej.right
+		if label in D[start][end]:
+			entry = D[start][end][label][ej.rightrank]
+			prob = entry.value
+		elif ej.rightrank == 0:
+			edge = chart[start][end][label][0]
 			prob = edge.inside
-		else:
-			prob = infinity
-			print "not found left:", ej
-	else: raise ValueError("non-zero rank vector not part of explored derivations")
-	result = e.rule.prob + prob
-	if ej.right >= 0: #if e.right.label:
-		eright = ChartItem(e.rule.rhs2, e.split, ej.head.right)
-		if eright in D: # and ej.right < len(D[eright]):
-			entry = D[eright][ej.right]; prob = entry.value
-		elif ej.right == 0:
-			if chart[eright.left][eright.right].get(eright.label):
-				edge = chart[e.split][ej.head.right][e.rule.rhs2][0]
-				prob = edge.inside
-			else:
-				prob = infinity
-				print "not found right:", ej
-
-		else: raise ValueError("non-zero rank vector not part of explored derivations")
+		else: raise ValueError(
+			"non-zero rank vector not part of explored derivations")
 		result += prob
 	return result
 
-cdef inline str getderivation(RankedEdge ej, dict D, list chart, dict tolabel,
-		list sent, int n):
+cdef inline getderivation(RankedEdge ej, list D, list chart,
+		dict tolabel, int n, str debin):
 	""" Translate the (e, j) notation to an actual tree string in
 	bracket notation.  e is an edge, j is a vector prescribing the rank of the
 	corresponding tail node. For example, given the edge <S, [NP, VP], 1.0> and
 	vector [2, 1], this points to the derivation headed by S and having the 2nd
 	best NP and the 1st best VP as children.
-	"""
-	cdef Edge edge, e
-	cdef ChartItem ei
-	cdef int i
-	cdef list children
-	if n > 100: return ""	#hardcoded limit to prevent cycles
-	e = ej.edge
-	children = []
-	eleft = ChartItem(e.rule.rhs1, ej.head.left, e.split)
-	eright = ChartItem(e.rule.rhs2, e.split, ej.head.right)
-	for ei, i in ((eleft, ej.left), (eright, ej.right)):
-		if i == -1: break
-		if chart[ei.left][ei.right].get(ei.label):
-			if ei in D:
-				entry = D[ei][i]
-				children.append(
-					getderivation(entry.key, D, chart, tolabel, sent, n + 1))
-			else:
-				if i == 0:
-					edge = chart[ei.left][ei.right][ei.label][0]
-					children.append(getderivation(
-						RankedEdge(ei, edge, 0, 0 if edge.rule.rhs2 else -1),
-						D, chart, tolabel, sent, n + 1))
-				else: raise ValueError("non-best edge missing in derivations")
-		else:
-			# this must be a terminal
-			children.append(sent[ei.left])
-
-	if "" in children: return ""
-	return "(%s %s)" % (tolabel[ej.head.label], "".join(children))
-
-def lazykbest(list chart, ChartItem goal, int k, dict tolabel, list sent):
-	""" wrapper function to run lazykthbest and get the actual derivations.
-	chart is a monotone hypergraph; should be acyclic unless probabilities
-	resolve the cycles (maybe nonzero weights for unary productions are
-	sufficient?).
-	maps ChartItems to lists of tuples with ChartItems and a weight. The
-	items in each list are to be ordered as they were added by the viterbi
-	parse, with the best item first.
-	goal is a ChartItem that is to be the root node of the derivations.
-	k is the number of derivations desired.
-	tolabel is a dictionary mapping numeric IDs to the original nonterminal
-	labels.  """
+	If `debin' is specified, will perform on-the-fly debinarization of nodes
+	with labels containing `debin' an a substring. """
+	cdef RankedEdge rankededge
 	cdef Entry entry
-	cdef double prob
-	D = {}
-	cand = {}
-	explored = set()
-	assert k # sanity check; don't ask for zero derivations
-	lazykthbest(goal, k, k, D, cand, chart, explored)
-	#for a in D:
-	#	print a.left, a.right
-	#	print tolabel[a.label] if a.label in tolabel else a.label
-	#	for entry in D[a]:
-	#		print entry.key, entry.value
-	logging.debug("%d (sub)derivations considered" % len(explored))
-	return filter(itemgetter(0), [
-			(getderivation(entry.key, D, chart, tolabel, sent, 0), entry.value)
-			for entry in D[goal]])
+	cdef Edge edge
+	cdef str child, children = ""
+	cdef int i = ej.leftrank
+	cdef unsigned int label
+	cdef short start, end
+	if n > 100: return ""	#hardcoded limit to prevent cycles
+	label = ej.edge.rule.rhs1
+	start = ej.left; end = ej.edge.split
+	while i != -1:
+		if label not in chart[start][end]:
+			# this must be a terminal
+			children = " %s" % ej.edge.rule.word.encode('utf-8')
+			break
+		if label in D[start][end]:
+			rankededge = (<Entry>D[start][end][label][i]).key
+		else:
+			assert i == 0, "non-best edge missing in derivations"
+			entry = getcandidates(chart, label, start, end, 1).popentry()
+			D[start][end][label] = [entry]
+			rankededge = entry.key
+		child = getderivation(rankededge, D, chart, tolabel, n + 1, debin)
+		if child == "": return ""
+		children += " %s" % child
+		if end == ej.right: break
+		label = ej.edge.rule.rhs2
+		start, end = end, ej.right
+		i = ej.rightrank
+	if debin is not None and debin in tolabel[ej.label]:
+		return children
+	return "(%s%s)" % (tolabel[ej.label], children)
 
+def getderiv(RankedEdge ej, dict D, dict chart, dict tolabel, int n, str debin):
+	return getderivation(ej, D, chart, tolabel, n, debin)
