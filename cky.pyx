@@ -214,7 +214,8 @@ def parse_sparse(list sent, Grammar grammar, chart):
 				if right > maxright[lhs, left]: maxright[lhs, left] = right
 		# unary rules on the span of this POS tag
 		# NB: for this agenda, only the probabilities of the edges matter
-		unaryagenda.update([(rhs1, edges[0]) for rhs1, edges in cell.iteritems() if edges])
+		unaryagenda.update([(rhs1, edges[0])
+				for rhs1, edges in cell.iteritems() if edges])
 		while unaryagenda.length:
 			entry = unaryagenda.popentry()
 			for rule in <list>grammar.unarybyrhs[entry.key]:
@@ -227,10 +228,10 @@ def parse_sparse(list sent, Grammar grammar, chart):
 					if prob >= (<Edge>cell[lhs][0]).inside: continue
 					unaryagenda.setitem(lhs, edge)
 					# switch previous best & new best
-					#cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], <Edge>entry.value
 					cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], cell[lhs][0]
 					continue
 				cell[lhs] = [edge]
+				unaryagenda.setitem(lhs, edge)
 				# update filter
 				if left > minleft[lhs, right]: minleft[lhs, right] = left
 				if left < maxleft[lhs, right]: maxleft[lhs, right] = left
@@ -276,7 +277,8 @@ def parse_sparse(list sent, Grammar grammar, chart):
 					if right > maxright[lhs, left]: maxright[lhs, left] = right
 
 			# unary rules
-			unaryagenda.update([(rhs1, edges[0]) for rhs1, edges in cell.iteritems() if edges])
+			unaryagenda.update([(rhs1, edges[0])
+					for rhs1, edges in cell.iteritems() if edges])
 			while unaryagenda.length:
 				entry = unaryagenda.popentry()
 				for rule in <list>grammar.unarybyrhs[entry.key]:
@@ -289,10 +291,10 @@ def parse_sparse(list sent, Grammar grammar, chart):
 						if prob >= (<Edge>cell[lhs][0]).inside: continue
 						unaryagenda.setitem(lhs, edge)
 						# switch previous best & new best
-						#cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], <Edge>entry.value
 						cell[lhs][0], cell[lhs][-1] = cell[lhs][-1], cell[lhs][0]
 						continue
 					cell[lhs] = [edge]
+					unaryagenda.setitem(lhs, edge)
 					# update filter
 					if left > minleft[lhs, right]: minleft[lhs, right] = left
 					if left < maxleft[lhs, right]: maxleft[lhs, right] = left
