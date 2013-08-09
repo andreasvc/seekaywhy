@@ -13,6 +13,9 @@ A probabilistic CKY parser for PCFGs.
 - reranking with DOP reductions: compute the exact DOP parse probability of
   the derivations from a coarse grammar.
 
+NB: all of these features are now incorporated in disco-dop;
+cf. https://github.com/andreasvc/disco-dop
+
 Requirements:
 -------------
 - Python 2.6+   http://www.python.org (need headers, e.g. python-dev package)
