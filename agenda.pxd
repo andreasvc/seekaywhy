@@ -43,4 +43,4 @@ cdef class EdgeAgenda(Agenda):
 	cpdef list getheap(self)
 	cpdef object getval(self, Entry entry)
 
-cdef inline list nsmallest(int n, list items)
+cdef list nsmallest(int n, list items)
