@@ -40,21 +40,28 @@ Example invocation:
 -------------------
 
 	$ python parser.py t.rules t.lexicon t.test
-	[...]
-	vitprob=0.002057407417695131
-	(TOP (S (NP (PN John))(VP (V sees)(NP (NP (DT the)(NN boy))(PP (IN with)(NP (DT the)(NN telescope)))))))
+	...
+	parsing: 0 John sees the boy with the telescope 1 2 3 4 5 6 7 
+	(TOP (S (NP (PN John)) (VP (VP (V sees) (NP (DT the) (NN boy))) (PP (IN with) (NP (DT the) (NN telescope))))))
+	...
+
 
 An example of coarse-to-fine with a PCFG reduction of DOP as the fine grammar:
 
 	$ python parser.py t.rules t.lexicon tdop.rules tdop.lexicon t.test
-	[...]
-	prob=5.715931040919541e-45
-	(TOP (S (NP (PN John))(VP (VP (V sees)(NP (DT the)(NN boy)))(PP (IN with)(NP (DT the)(NN telescope))))))
+	...
+	pruning ... sentprob=0.00617284   16 of 16 nonzero coarse items left
+	copied chart.
+	1 2 3 4 5 6 7 
+	(TOP (S (NP (PN John)) (VP (VP (V sees) (NP (DT the) (NN boy))) (PP (IN with) (NP (DT the) (NN telescope))))))
+
 
 Reranking PCFG parses using a DOP reduction as the fine grammar:
 
-	python parser.py --rerank t.rules t.lexicon tdop.rules tdop.lexicon t.test
-	[...]
-	prob=5.055473074786365e-16
-	(TOP (S (NP (PN John))(VP (VP (V sees)(NP (DT the)(NN boy)))(PP (IN with)(NP (DT the)(NN telescope))))))
+	$ python parser.py --rerank 3 t.rules t.lexicon tdop.rules tdop.lexicon t.test
+	...
+	0 0.0020574074177 5.05547307479e-16
+	1 0.00102870370885 5.02666557367e-16
+	(TOP (S (NP (PN John)) (VP (VP (V sees) (NP (DT the) (NN boy))) (PP (IN with) (NP (DT the) (NN telescope))))))
+
 
